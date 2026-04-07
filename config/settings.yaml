@@ -1,0 +1,21 @@
+project:
+  name: "quant_system"
+  version: "1.0.0"
+  description: "量化交易系统"
+
+data:
+  source: "tushare"
+  cache_dir: "./data/raw"
+  processed_dir: "./data/processed"
+  
+backtest:
+  start_date: "2020-01-01"
+  end_date: "2024-12-31"
+  initial_capital: 1000000
+  commission_rate: 0.0003
+  slippage: 0.0001
+  
+strategy:
+  rebalance_freq: "monthly"
+  max_position_pct: 0.05
+  min_position_pct: 0.01

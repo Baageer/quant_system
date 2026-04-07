@@ -1,0 +1,42 @@
+technical_factors:
+  - name: "MACD"
+    params:
+      fast_period: 12
+      slow_period: 26
+      signal_period: 9
+    enabled: true
+    
+  - name: "RSI"
+    params:
+      period: 14
+    enabled: true
+    
+  - name: "BOLL"
+    params:
+      period: 20
+      std_dev: 2
+    enabled: true
+
+fundamental_factors:
+  - name: "PE"
+    enabled: true
+    
+  - name: "PB"
+    enabled: true
+    
+  - name: "ROE"
+    enabled: true
+    
+  - name: "ROA"
+    enabled: true
+
+custom_factors:
+  - name: "momentum"
+    params:
+      lookback_period: 20
+    enabled: true
+
+factor_weights:
+  technical: 0.4
+  fundamental: 0.4
+  custom: 0.2
