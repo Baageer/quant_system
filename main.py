@@ -26,6 +26,8 @@ def main():
     logger.info("配置加载完成")
     
     data_api = DataAPI(
+        source=config['data']['source'],
+        stock_file=config['data']['stock_file'],
         cache_dir=config['data']['cache_dir'],
         processed_dir=config['data']['processed_dir']
     )

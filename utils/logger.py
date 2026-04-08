@@ -16,7 +16,15 @@ def setup_logger(
     if os.path.exists(config_path):
         with open(config_path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)
-            logging.config.dictConfig(config)
+        
+        for handler_config in config.get('handlers', {}).values():
+            filename = handler_config.get('filename')
+            if filename:
+                log_dir = os.path.dirname(filename)
+                if log_dir and not os.path.exists(log_dir):
+                    os.makedirs(log_dir, exist_ok=True)
+        
+        logging.config.dictConfig(config)
     else:
         logging.basicConfig(level=default_level)
     

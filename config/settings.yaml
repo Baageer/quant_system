@@ -4,9 +4,10 @@ project:
   description: "量化交易系统"
 
 data:
-  source: "tushare"
-  cache_dir: "./data/raw"
-  processed_dir: "./data/processed"
+  source: "akshare"
+  stock_file: "./test1.txt"
+  cache_dir: "./data/raw/tmp_akshare"
+  processed_dir: "./data/processed/tmp_akshare"
   
 backtest:
   start_date: "2020-01-01"

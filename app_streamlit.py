@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 # 页面配置
 # ======================
 st.set_page_config(layout="wide")
-st.title("📊 量化交易可视化 Demo")
+st.title("📊 可视化 Demo")
 
 # ======================
 # 侧边栏参数
