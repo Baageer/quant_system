@@ -31,10 +31,10 @@ class DataAPI:
                 line = line.strip()
                 if self.source == 'tushare':
                     if(line[0]=='6'):
-                        code = line + ".SH"
+                        line = line + ".SH"
                     else:
-                        code = line + ".SZ"
-                stock_list.append(code)
+                        line = line + ".SZ"
+                stock_list.append(line)
         return stock_list
     
     def get_price_history_data(
@@ -54,6 +54,8 @@ class DataAPI:
             data = ak.stock_zh_a_hist(symbol=symbol, period="daily", start_date=start_date, end_date=end_date, adjust="qfq")
             # 保存到缓存
             self.save_to_cache(data, f"{symbol}_{start_date}_{end_date}.csv", "price_history")
+            data.columns = ['index', 'date', 'code', 'open', 'close', 'high', 'low', 
+                    'volume', 'amount', 'amplitude', 'pct_change', 'change', 'turnover']
         return data
     
     def get_price_data(
