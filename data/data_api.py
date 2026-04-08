@@ -94,7 +94,7 @@ class DataAPI:
         """从缓存加载数据"""
         filepath = os.path.join(self.cache_dir, data_type, filename)
         if os.path.exists(filepath):
-            return pd.read_csv(filepath, index_col=0, parse_dates=True)
+            return pd.read_csv(filepath, index_col=0, parse_dates=True, date_format="%Y-%m-%d")
         return None
     
     def save_processed(self, data: pd.DataFrame, filename: str, data_type: str = "price"):
@@ -106,5 +106,5 @@ class DataAPI:
         """加载处理后的数据"""
         filepath = os.path.join(self.processed_dir, data_type, filename)
         if os.path.exists(filepath):
-            return pd.read_csv(filepath, index_col=0, parse_dates=True)
+            return pd.read_csv(filepath, index_col=0, parse_dates=True, date_format="%Y-%m-%d")
         return None

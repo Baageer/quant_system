@@ -6,6 +6,7 @@ import numpy as np
 from typing import Dict, List, Optional, Callable
 from datetime import datetime
 import yaml
+from tqdm import tqdm
 
 
 class BacktestEngine:
@@ -23,6 +24,7 @@ class BacktestEngine:
         
         self.cash = initial_capital
         self.positions = {}
+        self.position_costs = {}
         self.trades = []
         self.daily_values = []
     
@@ -36,7 +38,8 @@ class BacktestEngine:
         data: Dict[str, pd.DataFrame],
         strategy_func: Callable,
         start_date: Optional[str] = None,
-        end_date: Optional[str] = None
+        end_date: Optional[str] = None,
+        show_progress: bool = True
     ) -> pd.DataFrame:
         """运行回测"""
         all_dates = sorted(set(
@@ -49,7 +52,10 @@ class BacktestEngine:
         if end_date:
             all_dates = [d for d in all_dates if d <= pd.to_datetime(end_date)]
         
-        for date in all_dates:
+        total_days = len(all_dates)
+        date_iterator = tqdm(all_dates, desc="回测进度", unit="天", disable=not show_progress)
+        
+        for date in date_iterator:
             prices = {}
             for symbol, df in data.items():
                 if date in df.index:
@@ -66,6 +72,12 @@ class BacktestEngine:
                 'cash': self.cash,
                 'positions': self.positions.copy()
             })
+            
+            if show_progress:
+                date_iterator.set_postfix({
+                    '市值': f'{portfolio_value:,.0f}',
+                    '持仓': len(self.positions)
+                })
         
         return pd.DataFrame(self.daily_values).set_index('date')
     
@@ -88,30 +100,60 @@ class BacktestEngine:
                 cost = shares * price * (1 + self.commission_rate + self.slippage)
                 if cost <= self.cash:
                     self.cash -= cost
-                    self.positions[symbol] = self.positions.get(symbol, 0) + shares
+                    old_shares = self.positions.get(symbol, 0)
+                    old_cost = self.position_costs.get(symbol, 0)
+                    
+                    self.positions[symbol] = old_shares + shares
+                    
+                    if old_shares > 0:
+                        total_cost = old_cost + cost
+                        avg_cost = total_cost / self.positions[symbol]
+                        self.position_costs[symbol] = total_cost
+                    else:
+                        self.position_costs[symbol] = cost
+                    
                     self.trades.append({
                         'date': date,
                         'symbol': symbol,
                         'action': 'buy',
                         'shares': shares,
                         'price': price,
-                        'cost': cost
+                        'cost': cost,
+                        'avg_cost': self.position_costs[symbol] / self.positions[symbol]
                     })
             
             elif action == 'sell':
                 if symbol in self.positions and self.positions[symbol] >= shares:
                     revenue = shares * price * (1 - self.commission_rate - self.slippage)
+                    
+                    buy_cost = self.position_costs.get(symbol, 0)
+                    cost_per_share = buy_cost / self.positions[symbol] if self.positions[symbol] > 0 else 0
+                    sell_cost = cost_per_share * shares
+                    
+                    profit = revenue - sell_cost
+                    profit_pct = (profit / sell_cost * 100) if sell_cost > 0 else 0
+                    
                     self.cash += revenue
                     self.positions[symbol] -= shares
+                    
+                    remaining_ratio = self.positions[symbol] / (self.positions[symbol] + shares) if shares > 0 else 0
+                    self.position_costs[symbol] = buy_cost * remaining_ratio
+                    
                     if self.positions[symbol] == 0:
                         del self.positions[symbol]
+                        if symbol in self.position_costs:
+                            del self.position_costs[symbol]
+                    
                     self.trades.append({
                         'date': date,
                         'symbol': symbol,
                         'action': 'sell',
                         'shares': shares,
                         'price': price,
-                        'revenue': revenue
+                        'revenue': revenue,
+                        'cost': sell_cost,
+                        'profit': profit,
+                        'profit_pct': profit_pct
                     })
     
     def _calculate_portfolio_value(self, prices: Dict[str, float]) -> float:
