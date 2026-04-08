@@ -1,0 +1,67 @@
+timing_strategies:
+  ma_cross:
+    name: "双均线交叉策略"
+    module: "signals.timing.ma_cross"
+    class: "MACrossStrategy"
+    params:
+      short_window: 5
+      long_window: 20
+      use_filter: true
+      ma_filter_window: 30
+    min_data_length: 30
+    description: "短期均线上穿长期均线做多，下穿做空"
+  
+  rsi:
+    name: "RSI策略"
+    module: "signals.timing.rsi"
+    class: "RSIStrategy"
+    params:
+      window: 14
+      oversold: 30
+      overbought: 70
+      mode: "standard"
+    min_data_length: 20
+    description: "RSI超卖做多，超买卖出"
+  
+  rsi_cross:
+    name: "RSI穿越策略"
+    module: "signals.timing.rsi"
+    class: "RSIStrategy"
+    params:
+      window: 14
+      oversold: 30
+      overbought: 70
+      mode: "cross"
+    min_data_length: 20
+    description: "RSI穿越超卖超买线产生信号"
+  
+  macd:
+    name: "MACD策略"
+    module: "signals.timing.macd"
+    class: "MACDStrategy"
+    params:
+      fast_period: 12
+      slow_period: 26
+      signal_period: 9
+      mode: "cross"
+    min_data_length: 35
+    description: "MACD金叉做多，死叉做空"
+  
+  macd_histogram:
+    name: "MACD柱状图策略"
+    module: "signals.timing.macd"
+    class: "MACDStrategy"
+    params:
+      fast_period: 12
+      slow_period: 26
+      signal_period: 9
+      mode: "histogram"
+    min_data_length: 35
+    description: "MACD柱状图由负转正做多，由正转负做空"
+
+backtest:
+  default_strategy: "ma_cross"
+  trade_amount: 100000
+  initial_capital: 1000000
+  commission_rate: 0.0003
+  slippage: 0.0001
