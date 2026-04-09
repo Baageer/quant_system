@@ -187,7 +187,7 @@ def run_backtest(
     
     stock_list = data_api.get_stock_list()
     stock_list = stock_list[:100]
-    logger.info(f"股票列表: {stock_list}")
+    logger.info(f"股票数量: {len(stock_list)}")
     
     date_iterator = tqdm(stock_list, desc="数据加载进度", unit="个", disable=False)
     data = {}
@@ -278,7 +278,7 @@ def run_backtest(
         if 'reason' in trades.columns:
             stop_loss_count = len(trades[trades['reason'] == 'stop_loss'])
             stop_profit_count = len(trades[trades['reason'] == 'stop_profit'])
-            strategy_count = len(trades[trades['reason'] == 'strategy'])
+            strategy_count = len(trades[(trades['action'] == 'sell') & (trades['reason'] == 'strategy')])
             logger.info(f"止损卖出: {stop_loss_count} 次")
             logger.info(f"止盈卖出: {stop_profit_count} 次")
             logger.info(f"策略卖出: {strategy_count} 次")
