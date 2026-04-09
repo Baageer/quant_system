@@ -89,7 +89,7 @@ def get_weights(row):
 # =========================
 # Backtest (Dynamic Allocation)
 # =========================
-def backtest(df, capital=100000):
+def backtest(df, capital=100000, risk_per_stock=0.1):
     bb_capital = capital * 0.5
     rsi_capital = capital * 0.5
 
@@ -113,8 +113,11 @@ def backtest(df, capital=100000):
 
         # BB strategy
         if bb_pos == 0:
-            risk = bb_capital * 0.01
+            risk = bb_capital * risk_per_stock
             if row['bb_long']:
+                if row["pct_change"] > 9:
+                    print(row["pct_change"])
+                    continue
                 bb_entry = row['close']
                 bb_stop = bb_entry - 1.5 * row['atr']
                 bb_take = bb_entry + (bb_entry - bb_stop) * 2
@@ -127,6 +130,9 @@ def backtest(df, capital=100000):
             #     bb_pos = -1
         elif bb_pos == 1 :
             if row['low'] <= bb_stop:
+                if row["pct_change"] < -9:
+                    print(row["pct_change"])
+                    continue
                 pnl = (bb_stop - bb_entry) * bb_size
                 bb_capital += pnl
                 trades.append(pnl)
@@ -144,7 +150,7 @@ def backtest(df, capital=100000):
 
         # RSI strategy
         if rsi_pos == 0:
-            risk = rsi_capital * 0.01
+            risk = rsi_capital * risk_per_stock
             if row['rsi_long']:
                 rsi_entry = row['close']
                 rsi_stop = rsi_entry - 1.5 * row['atr']
@@ -182,7 +188,7 @@ def backtest(df, capital=100000):
 # =========================
 def performance(trades, equity_curve):
     trades = np.array(trades)
-    print(trades)
+
     if len(trades) == 0:
         return None
 
