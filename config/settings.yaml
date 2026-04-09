@@ -5,7 +5,7 @@ project:
 
 data:
   source: "akshare"
-  stock_file: "./data/test5.txt"
+  stock_file: "./data/HS300.txt"
   cache_dir: "./data/raw/tmp_akshare"
   processed_dir: "./data/processed/tmp_akshare"
   

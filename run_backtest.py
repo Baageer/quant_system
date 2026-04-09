@@ -50,7 +50,7 @@ class StrategyLoader:
             print()
 
 
-def create_strategy_function(strategy_class, strategy_params, trade_amount, min_data_length):
+def create_strategy_function(trade_amount):
     """创建策略函数"""
     
     def strategy_func(date, data, positions):
@@ -61,14 +61,9 @@ def create_strategy_function(strategy_class, strategy_params, trade_amount, min_
             if date not in df.index:
                 continue
             
-            window_data = df[df.index <= date]
-            
-            if len(window_data) < min_data_length:
+            current_signal = df.loc[date, 'signal']
+            if pd.isna(current_signal):
                 continue
-            
-            strategy = strategy_class(**strategy_params)
-            signal = strategy.generate_signal(window_data)
-            current_signal = signal.iloc[-1]
             
             current_pos = positions.get(symbol, 0)
             current_price = df.loc[date, 'close']
@@ -84,6 +79,8 @@ def create_strategy_function(strategy_class, strategy_params, trade_amount, min_
                     'action': 'sell',
                     'shares': current_pos
                 }
+        
+        
         
         return signals
     
@@ -135,8 +132,11 @@ def run_backtest(
         cache_dir=config['data']['cache_dir'],
         processed_dir=config['data']['processed_dir']
     )
+
+    strategy = strategy_class(**strategy_params)
     
     stock_list = data_api.get_stock_list()
+    stock_list = stock_list[:100]
     logger.info(f"股票列表: {stock_list}")
     
     data = {}
@@ -152,7 +152,14 @@ def run_backtest(
         df['date'] = pd.to_datetime(df['date'])
         df = df.set_index('date')
         df = df.sort_index()
-        
+
+        if len(df) < min_data_length:
+            df['signal'] = np.nan
+            data[symbol] = df
+            continue
+
+        signal = strategy.generate_signal(df)
+        df['signal'] = signal
         data[symbol] = df
     
     engine = BacktestEngine(
@@ -162,10 +169,9 @@ def run_backtest(
     )
     
     logger.info("回测引擎初始化完成")
+
     
-    strategy_func = create_strategy_function(
-        strategy_class, strategy_params, trade_amount, min_data_length
-    )
+    strategy_func = create_strategy_function(trade_amount)
     
     logger.info("开始执行回测...")
     results = engine.run(data, strategy_func, start_date, end_date, show_progress=True)
