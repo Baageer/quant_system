@@ -3,7 +3,7 @@
 """
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Optional, Callable
+from typing import Dict, List, Optional, Callable, Any
 from datetime import datetime
 import yaml
 from tqdm import tqdm
@@ -26,13 +26,104 @@ class BacktestEngine:
         self.cash = initial_capital
         self.positions = {}
         self.position_costs = {}
+        self.position_entry_prices = {}
+        self.position_high_prices = {}
         self.trades = []
         self.daily_values = []
+        
+        self.stop_loss_strategy = None
+        self.stop_profit_strategy = None
+        self.stop_strategies_config = {}
     
     def _load_config(self, config_path: str) -> Dict:
         """加载配置"""
         with open(config_path, 'r', encoding='utf-8') as f:
             return yaml.safe_load(f)
+    
+    def set_stop_strategies(
+        self,
+        stop_loss_strategy: Any = None,
+        stop_profit_strategy: Any = None,
+        stop_strategies_config: Dict = None
+    ):
+        """
+        设置止盈止损策略
+        
+        参数:
+            stop_loss_strategy: 止损策略实例
+            stop_profit_strategy: 止盈策略实例
+            stop_strategies_config: 止盈止损策略配置
+        """
+        self.stop_loss_strategy = stop_loss_strategy
+        self.stop_profit_strategy = stop_profit_strategy
+        self.stop_strategies_config = stop_strategies_config or {}
+    
+    def _check_stop_signals(
+        self,
+        data: Dict[str, pd.DataFrame],
+        date: datetime
+    ) -> Dict[str, Dict]:
+        """
+        检查持仓是否触发止盈止损
+        
+        参数:
+            data: 价格数据
+            date: 当前日期
+        
+        返回:
+            止盈止损信号字典
+        """
+        stop_signals = {}
+        
+        if not self.positions:
+            return stop_signals
+        
+        for symbol in list(self.positions.keys()):
+            if symbol not in data or date not in data[symbol].index:
+                continue
+            
+            df = data[symbol]
+            current_price = df.loc[date, 'close']
+            current_high = df.loc[date, 'high'] if 'high' in df.columns else current_price
+            entry_price = self.position_entry_prices.get(symbol)
+            highest_price = self.position_high_prices.get(symbol, entry_price)
+            
+            if entry_price is None:
+                continue
+            
+            self.position_high_prices[symbol] = max(highest_price, current_high)
+            
+            if self.stop_loss_strategy:
+                self.stop_loss_strategy.set_position(entry_price)
+                self.stop_loss_strategy.update_stop_price(
+                    self.position_high_prices[symbol]
+                )
+                if self.stop_loss_strategy.check_stop_loss(current_price):
+                    stop_signals[symbol] = {
+                        'action': 'sell',
+                        'shares': self.positions[symbol],
+                        'reason': 'stop_loss',
+                        'entry_price': entry_price,
+                        'stop_price': self.stop_loss_strategy.stop_price
+                    }
+                    continue
+            
+            if self.stop_profit_strategy:
+                self.stop_profit_strategy.set_position(entry_price)
+                self.stop_profit_strategy.update_profit_price(
+                    current_price,
+                    self.position_high_prices[symbol]
+                )
+                if self.stop_profit_strategy.check_stop_profit(current_price):
+                    stop_signals[symbol] = {
+                        'action': 'sell',
+                        'shares': self.positions[symbol],
+                        'reason': 'stop_profit',
+                        'entry_price': entry_price,
+                        'profit_price': self.stop_profit_strategy.profit_price
+                    }
+        
+        return stop_signals
     
     def run(
         self,
@@ -56,7 +147,7 @@ class BacktestEngine:
         total_days = len(all_dates)
         date_iterator = tqdm(all_dates, desc="回测进度", unit="天", disable=not show_progress)
         
-        time_dic = {"prices":0, "signals":0, "trades":0, "portfolio":0, "daily_values":0}
+        time_dic = {"prices":0, "signals":0, "stop_check":0, "trades":0, "portfolio":0, "daily_values":0}
         for date in date_iterator:
             start_time = time()
             prices = {}
@@ -66,10 +157,15 @@ class BacktestEngine:
             time_dic["prices"] += time() - start_time
             
             start_time = time()
+            stop_signals = self._check_stop_signals(data, date)
+            time_dic["stop_check"] += time() - start_time
+            
+            start_time = time()
             signals = strategy_func(date, data, self.positions)
             time_dic["signals"] += time() - start_time
             
             start_time = time()
+            self._execute_trades(stop_signals, prices, date)
             self._execute_trades(signals, prices, date)
             time_dic["trades"] += time() - start_time
             
@@ -108,6 +204,7 @@ class BacktestEngine:
             action = signal.get('action')
             shares = signal.get('shares', 0)
             price = prices[symbol]
+            reason = signal.get('reason', 'strategy')
             
             if action == 'buy':
                 cost = shares * price * (1 + self.commission_rate + self.slippage)
@@ -124,6 +221,8 @@ class BacktestEngine:
                         self.position_costs[symbol] = total_cost
                     else:
                         self.position_costs[symbol] = cost
+                        self.position_entry_prices[symbol] = price
+                        self.position_high_prices[symbol] = price
                     
                     self.trades.append({
                         'date': date,
@@ -132,7 +231,8 @@ class BacktestEngine:
                         'shares': shares,
                         'price': price,
                         'cost': cost,
-                        'avg_cost': self.position_costs[symbol] / self.positions[symbol]
+                        'avg_cost': self.position_costs[symbol] / self.positions[symbol],
+                        'reason': reason
                     })
             
             elif action == 'sell':
@@ -156,6 +256,10 @@ class BacktestEngine:
                         del self.positions[symbol]
                         if symbol in self.position_costs:
                             del self.position_costs[symbol]
+                        if symbol in self.position_entry_prices:
+                            del self.position_entry_prices[symbol]
+                        if symbol in self.position_high_prices:
+                            del self.position_high_prices[symbol]
                     
                     self.trades.append({
                         'date': date,
@@ -166,7 +270,8 @@ class BacktestEngine:
                         'revenue': revenue,
                         'cost': sell_cost,
                         'profit': profit,
-                        'profit_pct': profit_pct
+                        'profit_pct': profit_pct,
+                        'reason': reason
                     })
     
     def _calculate_portfolio_value(self, prices: Dict[str, float]) -> float:

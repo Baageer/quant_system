@@ -105,9 +105,30 @@ timing_strategies:
     min_data_length: 25
     description: "价格连续N根K线收于轨道外产生信号"
 
+stop_strategies:
+  stop_loss:
+    name: "止损策略"
+    module: "signals.stop.stop_loss"
+    class: "StopLossStrategy"
+    params:
+      loss_pct: 0.060
+      loss_type: "absolute"
+    min_data_length: 20
+    description: "价格跌破止损价格时触发止损"
+  
+  stop_profit:
+    name: "止盈策略"
+    module: "signals.stop.stop_profit"
+    class: "StopProfitStrategy"
+    params:
+      profit_pct: 0.500
+      profit_type: "absolute"
+    min_data_length: 20
+    description: "价格超过止盈价格时触发止盈"
+
 backtest:
   default_strategy: "ma_cross"
-  trade_amount: 100000
+  trade_amount: 10000
   initial_capital: 1000000
   commission_rate: 0.0003
   slippage: 0.0001
