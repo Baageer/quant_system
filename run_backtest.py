@@ -231,7 +231,7 @@ def run_backtest(
     results_file = f"{output_dir}/backtest_{strategy_name}_{timestamp}.csv"
     trades_file = f"{output_dir}/trades_{strategy_name}_{timestamp}.csv"
     
-    results.to_csv(results_file)
+    # results.to_csv(results_file)
     trades.to_csv(trades_file)
     
     logger.info(f"\n结果已保存:")
@@ -271,7 +271,7 @@ def main():
     parser.add_argument(
         '--end',
         type=str,
-        default='2024-12-31',
+        default='2023-12-31',
         help='回测结束日期 (YYYY-MM-DD)'
     )
     parser.add_argument(

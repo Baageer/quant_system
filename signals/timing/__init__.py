@@ -21,6 +21,14 @@ from .macd import (
     macd_combined_signal,
     MACDStrategy
 )
+from .bollinger_bands import (
+    calculate_bollinger_bands,
+    bollinger_breakout_signal,
+    bollinger_mean_reversion_signal,
+    bollinger_squeeze_signal,
+    bollinger_double_signal,
+    BollingerBandsStrategy
+)
 
 __all__ = [
     'ma_cross_signal',
@@ -37,4 +45,10 @@ __all__ = [
     'macd_zero_axis_signal',
     'macd_combined_signal',
     'MACDStrategy',
+    'calculate_bollinger_bands',
+    'bollinger_breakout_signal',
+    'bollinger_mean_reversion_signal',
+    'bollinger_squeeze_signal',
+    'bollinger_double_signal',
+    'BollingerBandsStrategy',
 ]

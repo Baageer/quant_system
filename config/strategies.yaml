@@ -58,6 +58,52 @@ timing_strategies:
       mode: "histogram"
     min_data_length: 35
     description: "MACD柱状图由负转正做多，由正转负做空"
+  
+  bollinger_breakout:
+    name: "布林带突破策略"
+    module: "signals.timing.bollinger_bands"
+    class: "BollingerBandsStrategy"
+    params:
+      window: 20
+      num_std: 2.0
+      mode: "breakout"
+    min_data_length: 25
+    description: "价格突破上轨做多，跌破下轨做空"
+  
+  bollinger_mean_reversion:
+    name: "布林带均值回归策略"
+    module: "signals.timing.bollinger_bands"
+    class: "BollingerBandsStrategy"
+    params:
+      window: 20
+      num_std: 2.0
+      mode: "mean_reversion"
+    min_data_length: 25
+    description: "价格触及上轨回落后做空，触及下轨反弹后做多"
+  
+  bollinger_squeeze:
+    name: "布林带收窄突破策略"
+    module: "signals.timing.bollinger_bands"
+    class: "BollingerBandsStrategy"
+    params:
+      window: 20
+      num_std: 2.0
+      mode: "squeeze"
+      squeeze_threshold: 0.1
+    min_data_length: 25
+    description: "布林带收窄后等待突破方向"
+  
+  bollinger_double:
+    name: "布林带双确认突破策略"
+    module: "signals.timing.bollinger_bands"
+    class: "BollingerBandsStrategy"
+    params:
+      window: 20
+      num_std: 2.0
+      mode: "double"
+      confirm_bars: 2
+    min_data_length: 25
+    description: "价格连续N根K线收于轨道外产生信号"
 
 backtest:
   default_strategy: "ma_cross"

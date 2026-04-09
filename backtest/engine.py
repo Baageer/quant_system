@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Callable
 from datetime import datetime
 import yaml
 from tqdm import tqdm
+from time import time
 
 
 class BacktestEngine:
@@ -55,30 +56,42 @@ class BacktestEngine:
         total_days = len(all_dates)
         date_iterator = tqdm(all_dates, desc="回测进度", unit="天", disable=not show_progress)
         
+        time_dic = {"prices":0, "signals":0, "trades":0, "portfolio":0, "daily_values":0}
         for date in date_iterator:
+            start_time = time()
             prices = {}
             for symbol, df in data.items():
                 if date in df.index:
                     prices[symbol] = df.loc[date, 'close']
+            time_dic["prices"] += time() - start_time
             
+            start_time = time()
             signals = strategy_func(date, data, self.positions)
+            time_dic["signals"] += time() - start_time
             
+            start_time = time()
             self._execute_trades(signals, prices, date)
+            time_dic["trades"] += time() - start_time
             
+            start_time = time()
             portfolio_value = self._calculate_portfolio_value(prices)
+            time_dic["portfolio"] += time() - start_time
+            
+            start_time = time()
             self.daily_values.append({
                 'date': date,
                 'portfolio_value': portfolio_value,
                 'cash': self.cash,
                 'positions': self.positions.copy()
             })
-            
+            time_dic["daily_values"] += time() - start_time
             if show_progress:
                 date_iterator.set_postfix({
                     '市值': f'{portfolio_value:,.0f}',
                     '持仓': len(self.positions)
                 })
         
+        print(time_dic)
         return pd.DataFrame(self.daily_values).set_index('date')
     
     def _execute_trades(
