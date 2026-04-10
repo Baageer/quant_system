@@ -54,8 +54,6 @@ class DataAPI:
             data = ak.stock_zh_a_hist(symbol=symbol, period="daily", start_date=start_date, end_date=end_date, adjust="qfq")
             # 保存到缓存
             self.save_to_cache(data, f"{symbol}_{start_date}_{end_date}.csv", "price_history")
-            data.columns = ['index', 'date', 'code', 'open', 'close', 'high', 'low', 
-                    'volume', 'amount', 'amplitude', 'pct_change', 'change', 'turnover']
         return data
     
     def get_price_data(
@@ -92,7 +90,8 @@ class DataAPI:
     
     def load_from_cache(self, filename: str, data_type: str = "price") -> pd.DataFrame:
         """从缓存加载数据"""
-        filepath = os.path.join(self.cache_dir, data_type, filename)
+        filepath = os.path.join(self.cache_dir, self.source,data_type, filename)
+        print(filepath)
         if os.path.exists(filepath):
             return pd.read_csv(filepath, index_col=0, parse_dates=True, date_format="%Y-%m-%d")
         return None

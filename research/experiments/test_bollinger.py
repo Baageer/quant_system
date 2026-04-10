@@ -2,7 +2,7 @@ from bollinger_version7 import *
 import os
 from tqdm import tqdm
 
-CSV_DIR= r"J:\workspace\2_quant\quant_system\data\raw\tmp_akshare\price_history"
+CSV_DIR= r"J:\workspace\2_quant\quant_system\data\raw\akshare\price_history"
 
 trade_sum = 0
 win_sum = 0

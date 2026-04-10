@@ -1,6 +1,7 @@
 """
 通用回测入口脚本
 支持通过配置文件选择策略和参数
+支持多信号组合
 """
 import argparse
 import yaml
@@ -11,9 +12,11 @@ from backtest.engine import BacktestEngine
 from backtest.performance import PerformanceAnalyzer
 from backtest.metrics import calculate_sharpe_ratio, calculate_max_drawdown
 from data.data_api import DataAPI
+from signals.signal_engine import SignalEngine
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
+from typing import List, Union, Optional
 
 
 class StrategyLoader:
@@ -115,7 +118,7 @@ def create_strategy_function(trade_amount):
 
 
 def run_backtest(
-    strategy_name: str,
+    strategy_name: Union[str, List[str]],
     start_date: str,
     end_date: str,
     config_path: str = "./config/settings.yaml",
@@ -124,7 +127,10 @@ def run_backtest(
     initial_capital: float = None,
     trade_amount: float = None,
     enable_stop_loss: bool = True,
-    enable_stop_profit: bool = True
+    enable_stop_profit: bool = True,
+    signal_combination: str = 'weighted',
+    signal_weights: Optional[List[float]] = None,
+    signal_threshold: float = 0.5
 ):
     """运行回测"""
     logger = setup_logger()
@@ -133,9 +139,27 @@ def run_backtest(
         config = yaml.safe_load(f)
     
     strategy_loader = StrategyLoader(strategy_config_path)
-    strategy_class, strategy_info = strategy_loader.get_strategy(strategy_name)
-    strategy_params = strategy_info['params']
-    min_data_length = strategy_info.get('min_data_length', 20)
+    
+    if isinstance(strategy_name, str):
+        strategy_names = [strategy_name]
+    else:
+        strategy_names = strategy_name
+    
+    strategies = []
+    strategy_infos = []
+    for name in strategy_names:
+        strategy_class, strategy_info = strategy_loader.get_strategy(name)
+        strategies.append(strategy_class(**strategy_info['params']))
+        strategy_infos.append(strategy_info)
+    
+    signal_engine = SignalEngine()
+    
+    if signal_weights is None:
+        signal_weights = [1.0 / len(strategies)] * len(strategies)
+    elif len(signal_weights) != len(strategies):
+        raise ValueError(f"权重数量({len(signal_weights)})与策略数量({len(strategies)})不匹配")
+
+    min_data_length = max([info.get('min_data_length', 20) for info in strategy_infos])
     
     backtest_config = strategy_loader.config.get('backtest', {})
     
@@ -160,8 +184,17 @@ def run_backtest(
             stop_profit_strategy = stop_profit_class(**stop_profit_info['params'])
     
     logger.info("=" * 60)
-    logger.info(f"策略: {strategy_info['name']}")
-    logger.info(f"参数: {strategy_params}")
+    if len(strategies) == 1:
+        logger.info(f"策略: {strategy_infos[0]['name']}")
+        logger.info(f"参数: {strategy_infos[0]['params']}")
+    else:
+        logger.info(f"多策略组合 ({len(strategies)}个策略):")
+        for i, (info, weight) in enumerate(zip(strategy_infos, signal_weights), 1):
+            logger.info(f"  {i}. {info['name']} - 权重: {weight:.2f}")
+            logger.info(f"     参数: {info['params']}")
+        logger.info(f"信号组合方式: {signal_combination}")
+        if signal_combination == 'threshold':
+            logger.info(f"信号阈值: {signal_threshold}")
     logger.info(f"回测区间: {start_date} 至 {end_date}")
     logger.info(f"初始资金: {initial_capital:,.2f}")
     logger.info(f"单次交易金额: {trade_amount:,.2f}")
@@ -183,16 +216,13 @@ def run_backtest(
         processed_dir=config['data']['processed_dir']
     )
 
-    strategy = strategy_class(**strategy_params)
-    
     stock_list = data_api.get_stock_list()
-    stock_list = stock_list[:100]
+    stock_list = stock_list[:1]
     logger.info(f"股票数量: {len(stock_list)}")
     
     date_iterator = tqdm(stock_list, desc="数据加载进度", unit="个", disable=False)
     data = {}
     for symbol in date_iterator:
-        # logger.info(f"加载 {symbol} 数据...")
         df = data_api.get_price_history_data(symbol, start_date, end_date)
         
         df.columns = ['date', 'code', 'open', 'close', 'high', 'low', 
@@ -207,8 +237,32 @@ def run_backtest(
             data[symbol] = df
             continue
 
-        signal = strategy.generate_signal(df)
-        df['signal'] = signal
+        if len(strategies) == 1:
+            signal = strategies[0].generate_signal(df)
+            df['signal'] = signal
+        else:
+            signals_list = []
+            for strategy in strategies:
+                signal = strategy.generate_signal(df)
+                signals_list.append(signal)
+            
+            combined_signal = signal_engine.combine_signals(signals_list, signal_weights)
+            
+            if signal_combination == 'weighted':
+                df['signal'] = combined_signal.apply(lambda x: 1 if x >= signal_threshold else (-1 if x <= -signal_threshold else 0))
+            elif signal_combination == 'voting':
+                vote_signal = pd.Series(0, index=df.index)
+                for signal in signals_list:
+                    vote_signal += signal
+                df['signal'] = vote_signal.apply(lambda x: 1 if x > 0 else (-1 if x < 0 else 0))
+            elif signal_combination == 'unanimous':
+                print(combined_signal.describe())
+                df['signal'] = combined_signal.apply(
+                    lambda x: 1 if x >= (len(strategies) - 0.5) else (-1 if x <= -(len(strategies) - 0.5) else 0)
+                )
+            else:
+                df['signal'] = combined_signal.apply(lambda x: 1 if x >= signal_threshold else (-1 if x <= -signal_threshold else 0))
+        
         data[symbol] = df
 
         date_iterator.set_postfix({
@@ -314,8 +368,9 @@ def run_backtest(
     os.makedirs(output_dir, exist_ok=True)
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    results_file = f"{output_dir}/backtest_{strategy_name}_{timestamp}.csv"
-    trades_file = f"{output_dir}/trades_{strategy_name}_{timestamp}.csv"
+    strategy_name_str = "_".join(strategy_names) if len(strategy_names) > 1 else strategy_names[0]
+    results_file = f"{output_dir}/backtest_{strategy_name_str}_{timestamp}.csv"
+    trades_file = f"{output_dir}/trades_{strategy_name_str}_{timestamp}.csv"
     
     # results.to_csv(results_file)
     trades.to_csv(trades_file)
@@ -329,12 +384,12 @@ def run_backtest(
 
 def main():
     """主函数"""
-    parser = argparse.ArgumentParser(description='量化交易系统通用回测')
+    parser = argparse.ArgumentParser(description='量化交易系统通用回测 - 支持多信号组合')
     parser.add_argument(
         '--strategy', '-s',
         type=str,
         default='ma_cross',
-        help='策略名称 (默认: ma_cross)'
+        help='策略名称，多个策略用逗号分隔 (例如: ma_cross,rsi_strategy) (默认: ma_cross)'
     )
     parser.add_argument(
         '--config', '-c',
@@ -389,6 +444,25 @@ def main():
         help='禁用止盈策略'
     )
     parser.add_argument(
+        '--signal-combination',
+        type=str,
+        default='weighted',
+        choices=['weighted', 'voting', 'unanimous'],
+        help='信号组合方式: weighted(加权平均), voting(投票), unanimous(一致同意) (默认: weighted)'
+    )
+    parser.add_argument(
+        '--signal-weights',
+        type=str,
+        default=None,
+        help='信号权重，多个权重用逗号分隔 (例如: 0.6,0.4)'
+    )
+    parser.add_argument(
+        '--signal-threshold',
+        type=float,
+        default=0.5,
+        help='信号阈值，用于判断买卖信号 (默认: 0.5)'
+    )
+    parser.add_argument(
         '--list', '-l',
         action='store_true',
         help='列出所有可用策略'
@@ -401,8 +475,14 @@ def main():
         loader.list_strategies()
         return
     
+    strategy_names = [s.strip() for s in args.strategy.split(',')]
+    
+    signal_weights = None
+    if args.signal_weights:
+        signal_weights = [float(w.strip()) for w in args.signal_weights.split(',')]
+    
     run_backtest(
-        strategy_name=args.strategy,
+        strategy_name=strategy_names if len(strategy_names) > 1 else strategy_names[0],
         start_date=args.start,
         end_date=args.end,
         config_path=args.config,
@@ -411,7 +491,10 @@ def main():
         initial_capital=args.capital,
         trade_amount=args.trade_amount,
         enable_stop_loss=not args.no_stop_loss,
-        enable_stop_profit=not args.no_stop_profit
+        enable_stop_profit=not args.no_stop_profit,
+        signal_combination=args.signal_combination,
+        signal_weights=signal_weights,
+        signal_threshold=args.signal_threshold
     )
 
 

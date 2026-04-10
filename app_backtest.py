@@ -28,7 +28,7 @@ def load_backtest_data(filepath: str) -> pd.DataFrame:
 
 
 def load_stock_price_data(symbol: str, start_date: str, end_date: str) -> Optional[pd.DataFrame]:
-    price_files = glob.glob(f'./data/raw/tmp_akshare/price_history/{symbol}_*.csv')
+    price_files = glob.glob(f'./data/raw/akshare/price_history/{symbol}_*.csv')
     
     if not price_files:
         st.warning(f"未找到股票 {symbol} 的历史价格数据")
