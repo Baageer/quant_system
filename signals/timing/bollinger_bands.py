@@ -4,31 +4,7 @@
 import pandas as pd
 import numpy as np
 from typing import Optional, Tuple
-
-
-def calculate_bollinger_bands(
-    data: pd.Series,
-    window: int = 20,
-    num_std: float = 2.0
-) -> Tuple[pd.Series, pd.Series, pd.Series]:
-    """
-    计算布林带指标
-    
-    参数:
-        data: 价格序列
-        window: 移动平均周期，默认20
-        num_std: 标准差倍数，默认2.0
-    
-    返回:
-        (上轨, 中轨, 下轨)
-    """
-    middle_band = data.rolling(window=window, min_periods=window).mean()
-    std = data.rolling(window=window, min_periods=window).std()
-    
-    upper_band = middle_band + num_std * std
-    lower_band = middle_band - num_std * std
-    
-    return upper_band, middle_band, lower_band
+from signals.indicators import bollinger_bands, supertrend
 
 
 def bollinger_breakout_signal(
@@ -54,7 +30,7 @@ def bollinger_breakout_signal(
         信号序列: 1=做多, -1=做空, 0=空仓
     """
     prices = data[price_col]
-    upper_band, middle_band, lower_band = calculate_bollinger_bands(
+    upper_band, middle_band, lower_band = bollinger_bands(
         prices, window, num_std
     )
     
@@ -110,7 +86,7 @@ def bollinger_mean_reversion_signal(
         信号序列: 1=做多, -1=做空, 0=空仓
     """
     prices = data[price_col]
-    upper_band, middle_band, lower_band = calculate_bollinger_bands(
+    upper_band, middle_band, lower_band = bollinger_bands(
         prices, window, num_std
     )
     
@@ -170,12 +146,17 @@ def bollinger_squeeze_signal(
         信号序列: 1=做多, -1=做空, 0=空仓
     """
     prices = data[price_col]
-    upper_band, middle_band, lower_band = calculate_bollinger_bands(
+    upper_band, middle_band, lower_band = bollinger_bands(
         prices, window, num_std
     )
+
+    supertrend_val, direction = supertrend(
+    data["high"],data["low"],prices)
     
     bandwidth = (upper_band - lower_band) / middle_band
     # print(bandwidth.describe())
+    squeeze_quantile = 0.2
+    threshold = bandwidth.quantile(squeeze_quantile)
     
     position = pd.Series(0, index=data.index)
     current_pos = 0
@@ -240,7 +221,7 @@ def bollinger_double_signal(
         信号序列: 1=做多, -1=做空, 0=空仓
     """
     prices = data[price_col]
-    upper_band, middle_band, lower_band = calculate_bollinger_bands(
+    upper_band, middle_band, lower_band = bollinger_bands(
         prices, window, num_std
     )
     
@@ -344,7 +325,7 @@ class BollingerBandsStrategy:
         price_col: str = 'close'
     ) -> dict:
         """获取布林带值用于可视化"""
-        upper_band, middle_band, lower_band = calculate_bollinger_bands(
+        upper_band, middle_band, lower_band = bollinger_bands(
             data[price_col],
             self.window,
             self.num_std

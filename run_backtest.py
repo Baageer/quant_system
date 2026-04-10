@@ -195,10 +195,8 @@ def run_backtest(
         # logger.info(f"加载 {symbol} 数据...")
         df = data_api.get_price_history_data(symbol, start_date, end_date)
         
-        if '日期' in df.columns:
-            df = df.rename(columns={'日期': 'date'})
-        if '收盘' in df.columns:
-            df = df.rename(columns={'收盘': 'close'})
+        df.columns = ['date', 'code', 'open', 'close', 'high', 'low', 
+                        'volume', 'amount', 'amplitude', 'pct_change', 'change', 'turnover']
         
         df['date'] = pd.to_datetime(df['date'])
         df = df.set_index('date')
@@ -253,9 +251,10 @@ def run_backtest(
         logger.info("没有交易记录")
         return results
     
-    total_trades = len(trades[trades['action'] == 'sell'])
+    total_trades = len(trades[trades['action'] == 'buy'])
+    total_trades_done = len(trades[trades['action'] == 'sell'])
     win_trades = len(trades[trades['profit'] > 0]) if 'profit' in trades.columns else 0
-    win_rate = (win_trades / total_trades * 100) if total_trades > 0 else 0
+    win_rate = (win_trades / total_trades_done * 100) if total_trades_done > 0 else 0
     
     logger.info("\n" + "=" * 60)
     logger.info("回测结果")
@@ -268,6 +267,7 @@ def run_backtest(
     logger.info(f"交易次数: {total_trades}")
     logger.info(f"胜率: {win_rate:.2f}%")
     logger.info(f"最大持仓个数: {max_position}")
+    logger.info(f"当前持仓个数: {len(results['positions'].iloc[-1].keys())}")
     
     if total_trades > 0 and 'profit' in trades.columns:
         avg_profit = trades['profit'].mean()
