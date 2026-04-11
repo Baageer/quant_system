@@ -30,7 +30,8 @@ if uploaded_file is not None:
 else:
     stock_list = ["000001"]
 
-data_api = DataAPI(source=source, stock_file=".test1.txt",cache_dir="./data/raw",processed_dir="./data/processed")
+data_api = DataAPI(source=source, stock_file=".test1.txt",
+           cache_dir="./data/raw",processed_dir="./data/processed")
 
 
 symbol = st.sidebar.selectbox("股票代码", stock_list if stock_list else ["000001"])
@@ -267,75 +268,9 @@ if show_kdj:
 
 st.subheader("📉 K线图与技术指标")
 
-chart_html = f"""
-<!DOCTYPE html>
-<html>
-<head>
-    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
-</head>
-<body>
-    <div id="chart" style="width:100%;height:{200 + num_rows * 150}px;"></div>
-    <script>
-        var graphData = {fig.to_json()};
-        
-        Plotly.newPlot('chart', graphData.data, graphData.layout, {{
-            responsive: true,
-            displayModeBar: true,
-            modeBarButtonsToAdd: ['drawline', 'drawopenpath', 'eraseshape']
-        }});
-        
-        var chartDiv = document.getElementById('chart');
-        
-        chartDiv.on('plotly_relayout', function(eventdata) {{
-            if (eventdata['xaxis.range[0]'] !== undefined) {{
-                var xStart = eventdata['xaxis.range[0]'];
-                var xEnd = eventdata['xaxis.range[1]'];
-                
-                var update = {{}};
-                var traces = graphData.data;
-                
-                for (var i = 0; i < traces.length; i++) {{
-                    var trace = traces[i];
-                    var visibleY = [];
-                    
-                    if (trace.x && trace.y) {{
-                        for (var j = 0; j < trace.x.length; j++) {{
-                            var xVal = trace.x[j];
-                            if (xVal >= xStart && xVal <= xEnd) {{
-                                if (trace.y[j] !== null && !isNaN(trace.y[j])) {{
-                                    visibleY.push(trace.y[j]);
-                                }}
-                            }}
-                        }}
-                        
-                        if (visibleY.length > 0) {{
-                            var minY = Math.min.apply(null, visibleY);
-                            var maxY = Math.max.apply(null, visibleY);
-                            var padding = (maxY - minY) * 0.05;
-                            
-                            var yaxis = 'yaxis';
-                            if (i > 0) {{
-                                var yAxisNum = trace.yaxis ? trace.yaxis.replace('y', '') : (i + 1);
-                                if (yAxisNum === '') yAxisNum = '1';
-                                yaxis = 'yaxis' + yAxisNum;
-                            }}
-                            
-                            update[yaxis + '.range'] = [minY - padding, maxY + padding];
-                        }}
-                    }}
-                }}
-                
-                if (Object.keys(update).length > 0) {{
-                    Plotly.relayout('chart', update);
-                }}
-            }}
-        }});
-    </script>
-</body>
-</html>
-"""
 
-components.html(chart_html, height=220 + num_rows * 150)
+fig.update_layout(hovermode='x unified')
+st.plotly_chart(fig, use_container_width=True)
 
 st.info("""
 **指标说明：**

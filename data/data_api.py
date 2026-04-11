@@ -45,15 +45,20 @@ class DataAPI:
         fields: Optional[List[str]] = None
     ) -> pd.DataFrame:
         """获取股票价格历史数据"""
-        start_date = "20050101"
-        end_date = "20241231"
+        d_start_date = "20050101"
+        d_end_date = "20241231"
         # 从缓存加载数据
-        data = self.load_from_cache(f"{symbol}_{start_date}_{end_date}.csv", "price_history")
+        data = self.load_from_cache(f"{symbol}_{d_start_date}_{d_end_date}.csv", "price_history")
         if data is None:
             # 从数据源获取数据
-            data = ak.stock_zh_a_hist(symbol=symbol, period="daily", start_date=start_date, end_date=end_date, adjust="qfq")
+            data = ak.stock_zh_a_hist(symbol=symbol, period="daily", start_date=d_start_date, end_date=d_end_date, adjust="qfq")
             # 保存到缓存
-            self.save_to_cache(data, f"{symbol}_{start_date}_{end_date}.csv", "price_history")
+            self.save_to_cache(data, f"{symbol}_{d_start_date}_{d_end_date}.csv", "price_history")
+            
+        # 筛选日期范围
+        data = data[(data['日期'] >= start_date) & (data['日期'] <= end_date)]
+        
+        
         return data
     
     def get_price_data(
@@ -85,12 +90,12 @@ class DataAPI:
     
     def save_to_cache(self, data: pd.DataFrame, filename: str, data_type: str = "price"):
         """保存数据到缓存"""
-        filepath = os.path.join(self.cache_dir, data_type, filename)
+        filepath = os.path.join(self.cache_dir, elf.source, data_type, filename)
         data.to_csv(filepath, index=True)
     
     def load_from_cache(self, filename: str, data_type: str = "price") -> pd.DataFrame:
         """从缓存加载数据"""
-        filepath = os.path.join(self.cache_dir, self.source,data_type, filename)
+        filepath = os.path.join(self.cache_dir, self.source, data_type, filename)
         print(filepath)
         if os.path.exists(filepath):
             return pd.read_csv(filepath, index_col=0, parse_dates=True, date_format="%Y-%m-%d")
@@ -98,12 +103,12 @@ class DataAPI:
     
     def save_processed(self, data: pd.DataFrame, filename: str, data_type: str = "price"):
         """保存处理后的数据"""
-        filepath = os.path.join(self.processed_dir, data_type, filename)
+        filepath = os.path.join(self.processed_dir, self.source, data_type, filename)
         data.to_csv(filepath, index=True)
     
     def load_processed(self, filename: str, data_type: str = "price") -> pd.DataFrame:
         """加载处理后的数据"""
-        filepath = os.path.join(self.processed_dir, data_type, filename)
+        filepath = os.path.join(self.processed_dir, self.source, data_type, filename)
         if os.path.exists(filepath):
             return pd.read_csv(filepath, index_col=0, parse_dates=True, date_format="%Y-%m-%d")
         return None
