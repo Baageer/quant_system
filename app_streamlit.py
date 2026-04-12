@@ -12,6 +12,9 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from data.data_api import DataAPI
 from signals import indicators
+from signals.timing.ma_cross import MACrossStrategy
+from signals.timing.bollinger_bands import BollingerBandsStrategy
+from signals.timing.volume import VolumeBreakoutStrategy, OBVStrategy, MFIStrategy, VolumePriceDivergenceStrategy
 
 st.set_page_config(layout="wide")
 st.title("📊 量化分析系统")
@@ -45,17 +48,54 @@ long_window = st.sidebar.slider("长期均线", 20, 200, 50)
 st.sidebar.subheader("技术指标参数")
 show_ma = st.sidebar.checkbox("显示均线", value=True)
 show_bb = st.sidebar.checkbox("显示布林带", value=False)
-show_rsi = st.sidebar.checkbox("显示RSI", value=True)
-show_macd = st.sidebar.checkbox("显示MACD", value=True)
-show_kdj = st.sidebar.checkbox("显示KDJ", value=True)
+
+# 合并震荡指标到下拉框
+oscillator_indicator = st.sidebar.selectbox(
+    "震荡指标", 
+    ["无", "RSI", "MACD", "KDJ"], 
+    index=1  # 默认选择RSI
+)
+
+show_rsi = (oscillator_indicator == "RSI")
+show_macd = (oscillator_indicator == "MACD")
+show_kdj = (oscillator_indicator == "KDJ")
+
+# 策略选择下拉框
+st.sidebar.subheader("策略选择")
+strategy_choice = st.sidebar.selectbox(
+    "交易策略", 
+    ["无", "双均线交叉", "布林带突破", "布林带均值回归", "布林带收窄突破", "布林带双确认突破", 
+     "成交量突破", "OBV指标", "MFI资金流量", "量价背离"], 
+    index=0  # 默认选择无
+)
 
 bb_window = st.sidebar.number_input("布林带周期", 5, 50, 20)
 bb_std = st.sidebar.number_input("布林带标准差倍数", 1.0, 3.0, 2.0, 0.1)
-rsi_window = st.sidebar.number_input("RSI周期", 5, 30, 14)
-macd_fast = st.sidebar.number_input("MACD快线", 5, 20, 12)
-macd_slow = st.sidebar.number_input("MACD慢线", 15, 40, 26)
-macd_signal = st.sidebar.number_input("MACD信号线", 5, 15, 9)
-kdj_n = st.sidebar.number_input("KDJ周期", 5, 20, 9)
+
+# 成交量策略参数
+volume_window = st.sidebar.number_input("成交量周期", 5, 50, 20)
+obv_window = st.sidebar.number_input("OBV周期", 5, 50, 20)
+mfi_window = st.sidebar.number_input("MFI周期", 5, 30, 14)
+mfi_overbought = st.sidebar.number_input("MFI超买阈值", 60, 90, 80)
+mfi_oversold = st.sidebar.number_input("MFI超卖阈值", 10, 40, 20)
+divergence_window = st.sidebar.number_input("量价背离周期", 5, 50, 20)
+
+# 设置默认参数值
+rsi_window = 14
+macd_fast = 12
+macd_slow = 26
+macd_signal = 9
+kdj_n = 9
+
+# 只显示当前选中指标的参数
+if show_rsi:
+    rsi_window = st.sidebar.number_input("RSI周期", 5, 30, 14)
+elif show_macd:
+    macd_fast = st.sidebar.number_input("MACD快线", 5, 20, 12)
+    macd_slow = st.sidebar.number_input("MACD慢线", 15, 40, 26)
+    macd_signal = st.sidebar.number_input("MACD信号线", 5, 15, 9)
+elif show_kdj:
+    kdj_n = st.sidebar.number_input("KDJ周期", 5, 20, 9)
 
 initial_cash = st.sidebar.number_input("初始资金", 1000, 1000000, 100000)
 
@@ -109,28 +149,57 @@ if show_kdj:
         df['high'], df['low'], df['close'], n=kdj_n
     )
 
+# 生成策略信号
+df['signal'] = 0
+if strategy_choice != "无":
+    if strategy_choice == "双均线交叉":
+        strategy = MACrossStrategy(short_window=short_window, long_window=long_window)
+        df['signal'] = strategy.generate_signal(df)
+    elif strategy_choice == "布林带突破":
+        strategy = BollingerBandsStrategy(window=bb_window, num_std=bb_std, mode='breakout')
+        df['signal'] = strategy.generate_signal(df)
+    elif strategy_choice == "布林带均值回归":
+        strategy = BollingerBandsStrategy(window=bb_window, num_std=bb_std, mode='mean_reversion')
+        df['signal'] = strategy.generate_signal(df)
+    elif strategy_choice == "布林带收窄突破":
+        strategy = BollingerBandsStrategy(window=bb_window, num_std=bb_std, mode='squeeze',squeeze_threshold=0.15)
+        df['signal'] = strategy.generate_signal(df)
+    elif strategy_choice == "布林带双确认突破":
+        strategy = BollingerBandsStrategy(window=bb_window, num_std=bb_std, mode='double')
+        df['signal'] = strategy.generate_signal(df)
+    elif strategy_choice == "成交量突破":
+        strategy = VolumeBreakoutStrategy(volume_window=volume_window)
+        df['signal'] = strategy.generate_signal(df)
+    elif strategy_choice == "OBV指标":
+        strategy = OBVStrategy(obv_window=obv_window)
+        df['signal'] = strategy.generate_signal(df)
+    elif strategy_choice == "MFI资金流量":
+        strategy = MFIStrategy(mfi_window=mfi_window, overbought=mfi_overbought, oversold=mfi_oversold)
+        df['signal'] = strategy.generate_signal(df)
+    elif strategy_choice == "量价背离":
+        strategy = VolumePriceDivergenceStrategy(window=divergence_window)
+        df['signal'] = strategy.generate_signal(df)
+
+# 提取买入点和卖出点
+df['buy_signal'] = 0
+df['sell_signal'] = 0
+df.loc[df['signal'] == 1, 'buy_signal'] = 1
+df.loc[df['signal'] == -1, 'sell_signal'] = 1
+
 num_rows = 2
-if show_rsi:
-    num_rows += 1
-if show_macd:
-    num_rows += 1
-if show_kdj:
+if show_rsi or show_macd or show_kdj:
     num_rows += 1
 
 row_heights = [0.5, 0.15]
-if show_rsi:
-    row_heights.append(0.15)
-if show_macd:
-    row_heights.append(0.15)
-if show_kdj:
+if show_rsi or show_macd or show_kdj:
     row_heights.append(0.15)
 
 subplot_titles = ['K线图', '成交量']
 if show_rsi:
     subplot_titles.append('RSI')
-if show_macd:
+elif show_macd:
     subplot_titles.append('MACD')
-if show_kdj:
+elif show_kdj:
     subplot_titles.append('KDJ')
 
 fig = make_subplots(
@@ -185,6 +254,46 @@ if show_bb:
         row=1, col=1
     )
 
+# 添加买卖点
+if strategy_choice != "无":
+    # 买入点（绿色向上箭头）
+    buy_signals = df[df['buy_signal'] == 1]
+    if not buy_signals.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=buy_signals.index,
+                y=buy_signals['low'] * 0.99,  # 稍微低于最低价
+                mode='markers',
+                name='买入信号',
+                marker=dict(
+                    symbol='arrow-up',
+                    color='green',
+                    size=10,
+                    line=dict(color='black', width=1)
+                )
+            ),
+            row=1, col=1
+        )
+    
+    # 卖出点（红色向下箭头）
+    sell_signals = df[df['sell_signal'] == 1]
+    if not sell_signals.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=sell_signals.index,
+                y=sell_signals['high'] * 1.01,  # 稍微高于最高价
+                mode='markers',
+                name='卖出信号',
+                marker=dict(
+                    symbol='arrow-down',
+                    color='red',
+                    size=10,
+                    line=dict(color='black', width=1)
+                )
+            ),
+            row=1, col=1
+        )
+
 colors = ['red' if df['close'].iloc[i] >= df['open'].iloc[i] else 'green' 
           for i in range(len(df))]
 fig.add_trace(
@@ -202,9 +311,7 @@ if show_rsi:
     fig.add_hline(y=70, line_dash="dash", line_color="red", opacity=0.5, row=current_row, col=1)
     fig.add_hline(y=30, line_dash="dash", line_color="green", opacity=0.5, row=current_row, col=1)
     fig.add_hline(y=50, line_dash="dot", line_color="gray", opacity=0.3, row=current_row, col=1)
-    current_row += 1
-
-if show_macd:
+elif show_macd:
     fig.add_trace(
         go.Scatter(x=df.index, y=df['MACD'], name='MACD', line=dict(color='blue', width=1)),
         row=current_row, col=1
@@ -219,9 +326,7 @@ if show_macd:
         row=current_row, col=1
     )
     fig.add_hline(y=0, line_dash="dot", line_color="gray", opacity=0.5, row=current_row, col=1)
-    current_row += 1
-
-if show_kdj:
+elif show_kdj:
     fig.add_trace(
         go.Scatter(x=df.index, y=df['K'], name='K', line=dict(color='blue', width=1)),
         row=current_row, col=1
@@ -248,34 +353,34 @@ fig.update_layout(
         xanchor="right",
         x=1
     ),
-    dragmode='zoom'
+    dragmode='pan',
+   
 )
 
 fig.update_xaxes(title_text="日期", row=num_rows, col=1, rangeslider_visible=False)
 
 fig.update_yaxes(title_text="价格", row=1, col=1, autorange=True, fixedrange=False)
-fig.update_yaxes(title_text="成交量", row=2, col=1, autorange=True, fixedrange=False)
+fig.update_yaxes(title_text="成交量", row=2, col=1, autorange=True, fixedrange=True)
 
 current_row = 3
 if show_rsi:
-    fig.update_yaxes(title_text="RSI", row=current_row, col=1, autorange=True, fixedrange=False)
-    current_row += 1
-if show_macd:
-    fig.update_yaxes(title_text="MACD", row=current_row, col=1, autorange=True, fixedrange=False)
-    current_row += 1
-if show_kdj:
-    fig.update_yaxes(title_text="KDJ", row=current_row, col=1, autorange=True, fixedrange=False)
+    fig.update_yaxes(title_text="RSI", row=current_row, col=1, autorange=True, fixedrange=True)
+elif show_macd:
+    fig.update_yaxes(title_text="MACD", row=current_row, col=1, autorange=True, fixedrange=True)
+elif show_kdj:
+    fig.update_yaxes(title_text="KDJ", row=current_row, col=1, autorange=True, fixedrange=True)
 
 st.subheader("📉 K线图与技术指标")
 
 
 fig.update_layout(hovermode='x unified')
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width='stretch')
 
 st.info("""
 **指标说明：**
 - **与K线叠加显示**：均线(MA)、布林带(BB) - 这些指标与价格范围相近，适合叠加在K线上
-- **单独显示**：RSI、MACD、KDJ - 这些震荡类指标数值范围不同，需要单独显示
+- **单独显示**：震荡指标（RSI、MACD、KDJ）- 这些震荡类指标数值范围不同，需要单独显示
+- **选择方式**：通过下拉框选择一种震荡指标进行显示
 - **同步交互**：所有图表共享X轴，缩放和拖动时自动同步
 """)
 
