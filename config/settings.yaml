@@ -6,8 +6,8 @@ project:
 data:
   source: "akshare"
   stock_file: "./data/HS300.txt"
-  cache_dir: "./data/raw/akshare"
-  processed_dir: "./data/processed/akshare"
+  cache_dir: "./data/raw"
+  processed_dir: "./data/processed"
   
 backtest:
   start_date: "2023-01-01"
