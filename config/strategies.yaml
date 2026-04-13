@@ -67,8 +67,13 @@ timing_strategies:
       window: 20
       num_std: 2.0
       mode: "breakout"
+      use_trend_filter: true
+      trend_window: 60
+      use_volume_filter: true
+      volume_window: 20
+      volume_multiplier: 1.2
     min_data_length: 25
-    description: "价格突破上轨做多，跌破下轨做空"
+    description: "价格突破轨道并结合趋势与放量确认方向"
   
   bollinger_mean_reversion:
     name: "布林带均值回归策略"
@@ -90,8 +95,13 @@ timing_strategies:
       num_std: 2.0
       mode: "squeeze"
       squeeze_threshold: 0.1
+      use_trend_filter: true
+      trend_window: 60
+      use_volume_filter: true
+      volume_window: 20
+      volume_multiplier: 1.2
     min_data_length: 25
-    description: "布林带收窄后等待突破方向"
+    description: "布林带收窄后结合趋势与放量确认突破方向"
   
   bollinger_double:
     name: "布林带双确认突破策略"
@@ -102,8 +112,64 @@ timing_strategies:
       num_std: 2.0
       mode: "double"
       confirm_bars: 2
+      use_trend_filter: true
+      trend_window: 60
+      use_volume_filter: true
+      volume_window: 20
+      volume_multiplier: 1.2
     min_data_length: 25
-    description: "价格连续N根K线收于轨道外产生信号"
+    description: "价格连续确认突破后，再结合趋势与放量入场"
+
+  volume_breakout:
+    name: "成交量突破策略"
+    module: "signals.timing.volume"
+    class: "VolumeBreakoutStrategy"
+    params:
+      volume_window: 20
+      z_thresh: 2.0
+      trend_window: 50
+      price_col: "close"
+      volume_col: "volume"
+    min_data_length: 50
+    description: "成交量显著放大且价格位于趋势线上方做多，下方做空"
+
+  obv:
+    name: "OBV指标策略"
+    module: "signals.timing.volume"
+    class: "OBVStrategy"
+    params:
+      obv_window: 20
+      price_col: "close"
+      volume_col: "volume"
+    min_data_length: 20
+    description: "OBV斜率配合价格趋势判断多空方向"
+
+  mfi:
+    name: "MFI资金流量策略"
+    module: "signals.timing.volume"
+    class: "MFIStrategy"
+    params:
+      mfi_window: 14
+      overbought: 80
+      oversold: 20
+      trend_window: 50
+      high_col: "high"
+      low_col: "low"
+      close_col: "close"
+      volume_col: "volume"
+    min_data_length: 50
+    description: "MFI穿越超买超卖阈值并结合趋势确认交易方向"
+
+  volume_price_divergence:
+    name: "量价背离策略"
+    module: "signals.timing.volume"
+    class: "VolumePriceDivergenceStrategy"
+    params:
+      window: 20
+      price_col: "close"
+      volume_col: "volume"
+    min_data_length: 20
+    description: "价格创新高但量能未同步，或价格创新低但量能逆势放大时产生信号"
 
 stop_strategies:
   stop_loss:

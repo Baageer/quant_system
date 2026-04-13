@@ -4,6 +4,7 @@ import pytest
 
 from signals.timing.bollinger_bands import (
     BollingerBandsStrategy,
+    bollinger_breakout_signal,
     bollinger_squeeze_signal,
 )
 
@@ -14,7 +15,8 @@ def _sample_ohlc(n: int = 160) -> pd.DataFrame:
     close = pd.Series(100 + np.cumsum(rng.normal(0, 1.2, size=n)), index=idx)
     high = close + rng.uniform(0.1, 1.0, size=n)
     low = close - rng.uniform(0.1, 1.0, size=n)
-    return pd.DataFrame({"close": close, "high": high, "low": low}, index=idx)
+    volume = pd.Series(rng.integers(800, 1600, size=n), index=idx)
+    return pd.DataFrame({"close": close, "high": high, "low": low, "volume": volume}, index=idx)
 
 
 class TestBollingerBandsStrategyValidation:
@@ -93,3 +95,65 @@ class TestBollingerBandsBehavior:
             signal_delay=0,
         )
         assert len(signal_on) == len(signal_off)
+
+    def test_breakout_volume_filter_blocks_low_volume_breakout(self):
+        idx = pd.date_range("2024-01-01", periods=8, freq="D")
+        df = pd.DataFrame(
+            {
+                "close": [10.0, 10.0, 10.0, 10.0, 10.0, 10.2, 10.4, 12.0],
+                "high": [10.1, 10.1, 10.1, 10.1, 10.1, 10.3, 10.5, 12.2],
+                "low": [9.9, 9.9, 9.9, 9.9, 9.9, 10.0, 10.2, 11.8],
+                "volume": [100, 100, 100, 100, 100, 100, 100, 100],
+            },
+            index=idx,
+        )
+
+        signal_without_filter = bollinger_breakout_signal(
+            data=df,
+            window=3,
+            num_std=1.0,
+            use_volume_filter=False,
+        )
+        signal_with_filter = bollinger_breakout_signal(
+            data=df,
+            window=3,
+            num_std=1.0,
+            use_volume_filter=True,
+            volume_window=3,
+            volume_multiplier=1.5,
+        )
+
+        assert signal_without_filter.iloc[-1] == 1
+        assert signal_with_filter.iloc[-1] == 0
+
+    def test_breakout_trend_filter_blocks_countertrend_breakout(self):
+        idx = pd.date_range("2024-02-01", periods=8, freq="D")
+        df = pd.DataFrame(
+            {
+                "close": [15.0, 14.0, 13.0, 12.0, 11.0, 10.8, 11.2, 11.8],
+                "high": [15.2, 14.2, 13.2, 12.2, 11.2, 11.0, 11.4, 12.0],
+                "low": [14.8, 13.8, 12.8, 11.8, 10.8, 10.6, 11.0, 11.6],
+                "volume": [100, 100, 100, 100, 100, 120, 180, 220],
+            },
+            index=idx,
+        )
+
+        signal_without_filter = bollinger_breakout_signal(
+            data=df,
+            window=3,
+            num_std=1.0,
+            use_trend_filter=False,
+            use_volume_filter=False,
+        )
+        signal_with_filter = bollinger_breakout_signal(
+            data=df,
+            window=3,
+            num_std=1.0,
+            use_trend_filter=True,
+            trend_window=7,
+            trend_slope_window=1,
+            use_volume_filter=False,
+        )
+
+        assert signal_without_filter.iloc[-1] == 1
+        assert signal_with_filter.iloc[-1] == 0

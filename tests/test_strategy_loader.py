@@ -12,6 +12,25 @@ class TestStrategyLoader:
         assert strategies[0].__class__.__name__ == "MACrossStrategy"
         assert strategy_infos[0]["module"] == "signals.timing.ma_cross"
 
+    def test_build_volume_timing_strategies(self):
+        loader = StrategyLoader("./config/strategies.yaml")
+
+        strategy_names = ["volume_breakout", "obv", "mfi", "volume_price_divergence"]
+        strategies, strategy_infos = loader.build_timing_strategies(strategy_names)
+
+        assert [strategy.__class__.__name__ for strategy in strategies] == [
+            "VolumeBreakoutStrategy",
+            "OBVStrategy",
+            "MFIStrategy",
+            "VolumePriceDivergenceStrategy",
+        ]
+        assert [info["module"] for info in strategy_infos] == [
+            "signals.timing.volume",
+            "signals.timing.volume",
+            "signals.timing.volume",
+            "signals.timing.volume",
+        ]
+
     def test_build_stop_strategies(self):
         loader = StrategyLoader("./config/strategies.yaml")
 
