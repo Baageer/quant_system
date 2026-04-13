@@ -90,7 +90,7 @@ class DataAPI:
     
     def save_to_cache(self, data: pd.DataFrame, filename: str, data_type: str = "price"):
         """保存数据到缓存"""
-        filepath = os.path.join(self.cache_dir, elf.source, data_type, filename)
+        filepath = os.path.join(self.cache_dir, self.source, data_type, filename)
         data.to_csv(filepath, index=True)
     
     def load_from_cache(self, filename: str, data_type: str = "price") -> pd.DataFrame:
