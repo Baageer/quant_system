@@ -33,6 +33,7 @@ def create_strategy_function(trade_amount):
         signals = {}
 
         for symbol, df in data.items():
+            # print(symbol)
             if date not in df.index:
                 continue
 
@@ -61,6 +62,7 @@ def run_backtest(
     config_path: str = "./config/settings.yaml",
     strategy_config_path: str = "./config/strategies.yaml",
     stock_file: str = None,
+    stock_max_number: int = -1,
     initial_capital: float = None,
     trade_amount: float = None,
     enable_stop_loss: bool = True,
@@ -102,7 +104,7 @@ def run_backtest(
             "initial_capital", config["backtest"]["initial_capital"]
         )
     if trade_amount is None:
-        trade_amount = backtest_config.get("trade_amount", 100000)
+        trade_amount = config["backtest"].get("trade_amount", 100000)
     if stock_file is None:
         stock_file = config["data"].get("stock_file", "./data/test1.txt")
 
@@ -153,7 +155,8 @@ def run_backtest(
     )
 
     stock_list = data_api.get_stock_list()
-    stock_list = stock_list[:1]
+    if stock_max_number != -1 and len(stock_list) > stock_max_number:
+        stock_list = stock_list[:stock_max_number]
     logger.info(f"Stock count: {len(stock_list)}")
 
     date_iterator = tqdm(stock_list, desc="Data loading", unit="symbol", disable=False)
@@ -365,7 +368,7 @@ def main():
     parser.add_argument(
         "--start",
         type=str,
-        default="2023-01-01",
+        default="2022-01-01",
         help="Backtest start date (YYYY-MM-DD)",
     )
     parser.add_argument(
@@ -427,6 +430,13 @@ def main():
         action="store_true",
         help="List all available strategies",
     )
+    parser.add_argument(
+        "--number",
+        "-n",
+        type=int,
+        default=-1,
+        help="backtest max number of stock",
+    )
 
     args = parser.parse_args()
 
@@ -448,6 +458,7 @@ def main():
         config_path=args.config,
         strategy_config_path=args.strategy_config,
         stock_file=args.stock_file,
+        stock_max_number=args.number,
         initial_capital=args.capital,
         trade_amount=args.trade_amount,
         enable_stop_loss=not args.no_stop_loss,

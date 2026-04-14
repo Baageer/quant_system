@@ -188,7 +188,7 @@ def bollinger_squeeze_signal(
     num_std: float = 2.0,
     squeeze_threshold: Optional[float] = 0.02,
     price_col: str = 'close',
-    squeeze_quantile: float = 0.2,
+    squeeze_quantile: float = 0.1,
     squeeze_lookback: int = 60,
     use_supertrend_filter: bool = False,
     use_trend_filter: bool = False,
@@ -208,7 +208,7 @@ def bollinger_squeeze_signal(
     prices = data[price_col]
     upper_band, middle_band, lower_band = bollinger_bands(prices, window, num_std)
     bandwidth = (upper_band - lower_band) / middle_band.replace(0, np.nan)
-
+    # print("squeeze_threshold", squeeze_threshold, squeeze_threshold is None)
     if squeeze_threshold is None:
         adaptive_threshold = bandwidth.rolling(
             window=squeeze_lookback,
@@ -426,13 +426,13 @@ class BollingerBandsStrategy:
             raise ValueError("volume_window must be greater than 1")
         if volume_multiplier <= 0:
             raise ValueError("volume_multiplier must be positive")
-        if squeeze_threshold is not None and squeeze_threshold <= 0:
-            raise ValueError("squeeze_threshold must be positive when provided")
         if not 0 < squeeze_quantile < 1:
             raise ValueError("squeeze_quantile must be between 0 and 1")
         if squeeze_lookback <= 1:
             raise ValueError("squeeze_lookback must be greater than 1")
 
+        if squeeze_threshold == "None":
+            squeeze_threshold = None
         self.window = window
         self.num_std = num_std
         self.mode = mode

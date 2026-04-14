@@ -96,7 +96,7 @@ class DataAPI:
     def load_from_cache(self, filename: str, data_type: str = "price") -> pd.DataFrame:
         """从缓存加载数据"""
         filepath = os.path.join(self.cache_dir, self.source, data_type, filename)
-        print(filepath)
+        # print(filepath)
         if os.path.exists(filepath):
             return pd.read_csv(filepath, index_col=0, parse_dates=True, date_format="%Y-%m-%d")
         return None

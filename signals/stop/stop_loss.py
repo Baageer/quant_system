@@ -58,7 +58,11 @@ def stop_loss_signal(
     loss_pct: float = 0.06,
     loss_type: str = "absolute",
     price_col: str = 'close',
-    high_col: str = 'high'
+    high_col: str = 'high',
+    low_col: str = 'low',
+    close_col: str = 'close',
+    atr_window: int = 14,
+    atr_multiplier: float = 2.0,
 ) -> pd.Series:
     """
     生成止损信号
@@ -87,6 +91,17 @@ def stop_loss_signal(
             )
             if prices.iloc[i] <= stop_price:
                 signals.iloc[i] = 1
+    elif loss_type == "atr":
+        atr_series = calculate_atr(
+            data,
+            window=atr_window,
+            high_col=high_col,
+            low_col=low_col,
+            close_col=close_col,
+        )
+        valid_atr = atr_series == atr_series
+        stop_prices = entry_price - atr_series * atr_multiplier
+        signals.loc[valid_atr] = (prices.loc[valid_atr] <= stop_prices.loc[valid_atr]).astype(int)
     else:
         stop_price = calculate_stop_loss_price(entry_price, loss_pct, loss_type)
         signals = (prices <= stop_price).astype(int)

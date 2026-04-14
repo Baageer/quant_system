@@ -9,6 +9,9 @@ import yaml
 from tqdm import tqdm
 from time import time
 
+from signals.stop.stop_loss import calculate_atr as calculate_stop_loss_atr
+from signals.stop.stop_profit import calculate_atr as calculate_stop_profit_atr
+
 
 class BacktestEngine:
     def __init__(
@@ -34,6 +37,7 @@ class BacktestEngine:
         self.stop_loss_strategy = None
         self.stop_profit_strategy = None
         self.stop_strategies_config = {}
+        self.stop_indicator_columns = {}
     
     def _load_config(self, config_path: str) -> Dict:
         """加载配置"""
@@ -57,6 +61,31 @@ class BacktestEngine:
         self.stop_loss_strategy = stop_loss_strategy
         self.stop_profit_strategy = stop_profit_strategy
         self.stop_strategies_config = stop_strategies_config or {}
+        self.stop_indicator_columns = {}
+
+    def _prepare_stop_indicators(self, data: Dict[str, pd.DataFrame]):
+        """Precompute stop-strategy indicators once per run."""
+        self.stop_indicator_columns = {}
+
+        if self.stop_loss_strategy and getattr(self.stop_loss_strategy, "loss_type", None) == "atr":
+            column_name = f"stop_loss_atr_{self.stop_loss_strategy.atr_window}"
+            self.stop_indicator_columns["stop_loss"] = column_name
+            for df in data.values():
+                if column_name not in df.columns:
+                    df[column_name] = calculate_stop_loss_atr(
+                        df,
+                        window=self.stop_loss_strategy.atr_window,
+                    )
+
+        if self.stop_profit_strategy and getattr(self.stop_profit_strategy, "profit_type", None) == "atr":
+            column_name = f"stop_profit_atr_{self.stop_profit_strategy.atr_window}"
+            self.stop_indicator_columns["stop_profit"] = column_name
+            for df in data.values():
+                if column_name not in df.columns:
+                    df[column_name] = calculate_stop_profit_atr(
+                        df,
+                        window=self.stop_profit_strategy.atr_window,
+                    )
     
     def _check_stop_signals(
         self,
@@ -94,9 +123,17 @@ class BacktestEngine:
             self.position_high_prices[symbol] = max(highest_price, current_high)
             
             if self.stop_loss_strategy:
+                stop_loss_atr = None
+                stop_loss_atr_col = self.stop_indicator_columns.get("stop_loss")
+                if stop_loss_atr_col:
+                    stop_loss_atr = df.loc[date, stop_loss_atr_col]
+                    if stop_loss_atr != stop_loss_atr:
+                        stop_loss_atr = None
+
                 self.stop_loss_strategy.set_position(entry_price)
                 self.stop_loss_strategy.update_stop_price(
-                    self.position_high_prices[symbol]
+                    self.position_high_prices[symbol],
+                    stop_loss_atr,
                 )
                 if self.stop_loss_strategy.check_stop_loss(current_price):
                     stop_signals[symbol] = {
@@ -109,10 +146,18 @@ class BacktestEngine:
                     continue
             
             if self.stop_profit_strategy:
+                stop_profit_atr = None
+                stop_profit_atr_col = self.stop_indicator_columns.get("stop_profit")
+                if stop_profit_atr_col:
+                    stop_profit_atr = df.loc[date, stop_profit_atr_col]
+                    if stop_profit_atr != stop_profit_atr:
+                        stop_profit_atr = None
+
                 self.stop_profit_strategy.set_position(entry_price)
                 self.stop_profit_strategy.update_profit_price(
                     current_price,
-                    self.position_high_prices[symbol]
+                    self.position_high_prices[symbol],
+                    stop_profit_atr,
                 )
                 if self.stop_profit_strategy.check_stop_profit(current_price):
                     stop_signals[symbol] = {
@@ -134,6 +179,8 @@ class BacktestEngine:
         show_progress: bool = True
     ) -> pd.DataFrame:
         """运行回测"""
+        self._prepare_stop_indicators(data)
+
         all_dates = sorted(set(
             date for df in data.values() 
             for date in df.index

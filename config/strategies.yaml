@@ -99,7 +99,7 @@ timing_strategies:
       trend_window: 60
       use_volume_filter: true
       volume_window: 20
-      volume_multiplier: 1.2
+      volume_multiplier: 2
     min_data_length: 25
     description: "布林带收窄后结合趋势与放量确认突破方向"
   
@@ -189,16 +189,16 @@ stop_strategies:
     module: "signals.stop.stop_profit"
     class: "StopProfitStrategy"
     params:
-      profit_pct: 0.500
-      profit_type: "atr"
+      profit_pct: 0.07500
+      profit_type: "trailing"
       atr_window: 14
       atr_multiplier: 2
     min_data_length: 20
     description: "价格超过止盈价格时触发止盈"
 
-backtest:
-  default_strategy: "ma_cross"
-  trade_amount: 10000
-  initial_capital: 1000000
-  commission_rate: 0.0003
-  slippage: 0.0001
+# backtest:
+#   default_strategy: "ma_cross"
+#   trade_amount: 100000
+#   initial_capital: 1000000
+#   commission_rate: 0.0003
+#   slippage: 0.0001

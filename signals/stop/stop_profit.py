@@ -58,7 +58,11 @@ def stop_profit_signal(
     profit_pct: float = 0.06,
     profit_type: str = "absolute",
     price_col: str = 'close',
-    low_col: str = 'low'
+    low_col: str = 'low',
+    high_col: str = 'high',
+    close_col: str = 'close',
+    atr_window: int = 14,
+    atr_multiplier: float = 2.0,
 ) -> pd.Series:
     """
     生成止盈信号
@@ -87,6 +91,17 @@ def stop_profit_signal(
             )
             if prices.iloc[i] >= profit_price:
                 signals.iloc[i] = 1
+    elif profit_type == "atr":
+        atr_series = calculate_atr(
+            data,
+            window=atr_window,
+            high_col=high_col,
+            low_col=low_col,
+            close_col=close_col,
+        )
+        valid_atr = atr_series == atr_series
+        profit_prices = entry_price + atr_series * atr_multiplier
+        signals.loc[valid_atr] = (prices.loc[valid_atr] >= profit_prices.loc[valid_atr]).astype(int)
     else:
         profit_price = calculate_stop_profit_price(entry_price, profit_pct, profit_type)
         signals = (prices >= profit_price).astype(int)
