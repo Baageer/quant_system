@@ -29,7 +29,8 @@ def main():
         source=config['data']['source'],
         stock_file=config['data']['stock_file'],
         cache_dir=config['data']['cache_dir'],
-        processed_dir=config['data']['processed_dir']
+        processed_dir=config['data']['processed_dir'],
+        adjust_mode=config['data'].get('adjust_mode', 'hfq'),
     )
     logger.info("数据接口初始化完成")
     

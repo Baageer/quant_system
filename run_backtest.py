@@ -43,6 +43,8 @@ def create_strategy_function(trade_amount):
 
             current_pos = positions.get(symbol, 0)
             current_price = df.loc[date, "close"]
+            if pd.isna(current_price) or current_price <= 0:
+                continue
             shares = int(trade_amount / current_price)
 
             if current_signal == 1 and current_pos == 0:
@@ -57,14 +59,15 @@ def create_strategy_function(trade_amount):
 
 def run_backtest(
     strategy_name: Union[str, List[str]],
-    start_date: str,
-    end_date: str,
+    start_date: str = None,
+    end_date: str = None,
     config_path: str = "./config/settings.yaml",
     strategy_config_path: str = "./config/strategies.yaml",
     stock_file: str = None,
     stock_max_number: int = -1,
     initial_capital: float = None,
     trade_amount: float = None,
+    adjust_mode: Optional[str] = None,
     enable_stop_loss: bool = True,
     enable_stop_profit: bool = True,
     signal_combination: str = "weighted",
@@ -99,6 +102,10 @@ def run_backtest(
     min_data_length = max(info.get("min_data_length", 20) for info in strategy_infos)
     backtest_config = strategy_loader.config.get("backtest", {})
 
+    if start_date is None :
+        start_date = config["backtest"].get("start_date", "2022-01-01")
+    if end_date is None :
+        end_date = config["backtest"].get("end_date", "2023-12-31")
     if initial_capital is None:
         initial_capital = backtest_config.get(
             "initial_capital", config["backtest"]["initial_capital"]
@@ -107,6 +114,10 @@ def run_backtest(
         trade_amount = config["backtest"].get("trade_amount", 100000)
     if stock_file is None:
         stock_file = config["data"].get("stock_file", "./data/test1.txt")
+    if adjust_mode is None:
+        adjust_mode = config["data"].get("adjust_mode", "hfq")
+
+    data_source = config["data"].get("source", "akshare")
 
     (
         stop_loss_strategy,
@@ -132,6 +143,7 @@ def run_backtest(
             logger.info(f"Signal threshold: {signal_threshold}")
 
     logger.info(f"Backtest period: {start_date} to {end_date}")
+    logger.info(f"Adjust mode: {adjust_mode or 'raw'}")
     logger.info(f"Initial capital: {initial_capital:,.2f}")
     logger.info(f"Trade amount: {trade_amount:,.2f}")
     logger.info(f"Stock file: {stock_file}")
@@ -148,10 +160,11 @@ def run_backtest(
     logger.info("=" * 60)
 
     data_api = DataAPI(
-        source="akshare",
+        source=data_source,
         stock_file=stock_file,
         cache_dir=config["data"]["cache_dir"],
         processed_dir=config["data"]["processed_dir"],
+        adjust_mode=adjust_mode,
     )
 
     stock_list = data_api.get_stock_list()
@@ -159,10 +172,10 @@ def run_backtest(
         stock_list = stock_list[:stock_max_number]
     logger.info(f"Stock count: {len(stock_list)}")
 
-    date_iterator = tqdm(stock_list, desc="Data loading", unit="symbol", disable=False)
+    data_iterator = tqdm(stock_list, desc="Data loading", unit="symbol", disable=False)
     data = {}
 
-    for symbol in date_iterator:
+    for symbol in data_iterator:
         df = data_api.get_price_history_data(symbol, start_date, end_date)
         df.columns = [
             "date",
@@ -182,6 +195,17 @@ def run_backtest(
         df["date"] = pd.to_datetime(df["date"])
         df = df.set_index("date")
         df = df.sort_index()
+
+        invalid_prices = data_api.detect_non_positive_prices(df)
+        if invalid_prices:
+            invalid_summary = ", ".join(
+                f"{column}={count}" for column, count in invalid_prices.items()
+            )
+            logger.warning(
+                f"Skipping {symbol}: found non-positive prices under "
+                f"adjust_mode={data_api.adjust_mode_label} ({invalid_summary})"
+            )
+            continue
 
         if len(df) < min_data_length:
             df["signal"] = np.nan
@@ -220,7 +244,13 @@ def run_backtest(
                 )
 
         data[symbol] = df
-        date_iterator.set_postfix({"loading": symbol})
+        data_iterator.set_postfix({"loading": symbol})
+
+    if not data:
+        raise ValueError(
+            f"No valid price data loaded for backtest. "
+            f"Please check stock universe and adjust_mode={data_api.adjust_mode_label}."
+        )
 
     engine = BacktestEngine(
         initial_capital=initial_capital,
@@ -368,13 +398,13 @@ def main():
     parser.add_argument(
         "--start",
         type=str,
-        default="2022-01-01",
+        default=None,
         help="Backtest start date (YYYY-MM-DD)",
     )
     parser.add_argument(
         "--end",
         type=str,
-        default="2023-12-31",
+        default=None,
         help="Backtest end date (YYYY-MM-DD)",
     )
     parser.add_argument(
@@ -404,6 +434,12 @@ def main():
         "--no-stop-profit",
         action="store_true",
         help="Disable stop-profit strategy",
+    )
+    parser.add_argument(
+        "--adjust-mode",
+        type=str,
+        default=None,
+        help="Price adjust mode override: hfq, qfq, or none",
     )
     parser.add_argument(
         "--signal-combination",
@@ -461,6 +497,7 @@ def main():
         stock_max_number=args.number,
         initial_capital=args.capital,
         trade_amount=args.trade_amount,
+        adjust_mode=args.adjust_mode,
         enable_stop_loss=not args.no_stop_loss,
         enable_stop_profit=not args.no_stop_profit,
         signal_combination=args.signal_combination,
