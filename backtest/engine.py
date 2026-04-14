@@ -31,8 +31,21 @@ class BacktestEngine:
         self.position_costs = {}
         self.position_entry_prices = {}
         self.position_high_prices = {}
+        self.last_buy_dates = {}
         self.trades = []
         self.daily_values = []
+
+        default_constraints = {
+            "enforce_lot_size": True,
+            "lot_size": 100,
+            "enable_t1": True,
+            "block_suspended": True,
+            "block_limit_up": True,
+            "block_limit_down": True,
+            "limit_pct": 0.10,
+        }
+        config_constraints = self.config.get("backtest", {}).get("trade_constraints", {})
+        self.trade_constraints = {**default_constraints, **config_constraints}
         
         self.stop_loss_strategy = None
         self.stop_profit_strategy = None
@@ -86,6 +99,142 @@ class BacktestEngine:
                         df,
                         window=self.stop_profit_strategy.atr_window,
                     )
+
+    def _get_trade_row(
+        self,
+        data: Dict[str, pd.DataFrame],
+        symbol: str,
+        date: datetime,
+    ) -> Optional[pd.Series]:
+        df = data.get(symbol)
+        if df is None or date not in df.index:
+            return None
+        return df.loc[date]
+
+    def _get_previous_close(
+        self,
+        df: pd.DataFrame,
+        date: datetime,
+        row: pd.Series,
+    ) -> Optional[float]:
+        loc = df.index.get_loc(date)
+        if isinstance(loc, slice):
+            loc = loc.start
+        elif isinstance(loc, np.ndarray):
+            loc = int(loc[0])
+
+        if isinstance(loc, int) and loc > 0:
+            prev_close = df["close"].iloc[loc - 1]
+            if pd.notna(prev_close):
+                return float(prev_close)
+
+        pct_change = row.get("pct_change")
+        close_price = row.get("close")
+        if pd.notna(pct_change) and pd.notna(close_price):
+            denominator = 1 + float(pct_change) / 100
+            if abs(denominator) > 1e-8:
+                return float(close_price) / denominator
+
+        return None
+
+    def _is_suspended(self, row: pd.Series) -> bool:
+        for column in ["open", "close", "high", "low"]:
+            if column not in row or pd.isna(row[column]):
+                return True
+
+        if "volume" in row and pd.notna(row["volume"]) and float(row["volume"]) <= 0:
+            return True
+
+        if "amount" in row and pd.notna(row["amount"]) and float(row["amount"]) <= 0:
+            return True
+
+        return False
+
+    def _is_limit_move(
+        self,
+        action: str,
+        df: pd.DataFrame,
+        date: datetime,
+        row: pd.Series,
+    ) -> bool:
+        prev_close = self._get_previous_close(df, date, row)
+        if prev_close is None or prev_close <= 0:
+            return False
+
+        limit_pct = float(self.trade_constraints.get("limit_pct", 0.10))
+        upper_limit = prev_close * (1 + limit_pct)
+        lower_limit = prev_close * (1 - limit_pct)
+        tolerance = max(abs(prev_close) * 1e-4, 1e-6)
+
+        close_price = float(row["close"])
+        high_price = float(row["high"]) if "high" in row and pd.notna(row["high"]) else close_price
+        low_price = float(row["low"]) if "low" in row and pd.notna(row["low"]) else close_price
+
+        if action == "buy":
+            return close_price >= upper_limit - tolerance and high_price >= upper_limit - tolerance
+
+        if action == "sell":
+            return close_price <= lower_limit + tolerance and low_price <= lower_limit + tolerance
+
+        return False
+
+    def _normalize_shares(self, symbol: str, action: str, shares: int) -> int:
+        shares = int(shares)
+        if shares <= 0:
+            return 0
+
+        if not self.trade_constraints.get("enforce_lot_size", True):
+            if action == "sell":
+                return min(shares, self.positions.get(symbol, 0))
+            return shares
+
+        lot_size = max(int(self.trade_constraints.get("lot_size", 100)), 1)
+        if action == "buy":
+            return (shares // lot_size) * lot_size
+
+        current_pos = self.positions.get(symbol, 0)
+        shares = min(shares, current_pos)
+        if shares == current_pos:
+            return shares
+        return (shares // lot_size) * lot_size
+
+    def _violates_t1(self, symbol: str, action: str, date: datetime) -> bool:
+        if action != "sell" or not self.trade_constraints.get("enable_t1", True):
+            return False
+
+        last_buy_date = self.last_buy_dates.get(symbol)
+        if last_buy_date is None:
+            return False
+
+        return pd.Timestamp(date).normalize() <= pd.Timestamp(last_buy_date).normalize()
+
+    def _can_execute_trade(
+        self,
+        data: Dict[str, pd.DataFrame],
+        symbol: str,
+        action: str,
+        date: datetime,
+    ) -> bool:
+        row = self._get_trade_row(data, symbol, date)
+        if row is None:
+            return False
+
+        if self.trade_constraints.get("block_suspended", True) and self._is_suspended(row):
+            return False
+
+        df = data[symbol]
+        if action == "buy" and self.trade_constraints.get("block_limit_up", True):
+            if self._is_limit_move("buy", df, date, row):
+                return False
+
+        if action == "sell" and self.trade_constraints.get("block_limit_down", True):
+            if self._is_limit_move("sell", df, date, row):
+                return False
+
+        if self._violates_t1(symbol, action, date):
+            return False
+
+        return True
     
     def _check_stop_signals(
         self,
