@@ -576,3 +576,79 @@ class TestSuperTrend:
         st_val, direction = supertrend(downtrend_data['high'], downtrend_data['low'], downtrend_data['close'])
         
         assert direction.iloc[-1] == -1
+
+
+class TestIndicatorReferenceValues:
+
+    def test_obv_matches_reference_values(self):
+        close = pd.Series([10.0, 11.0, 10.0, 12.0])
+        volume = pd.Series([100.0, 200.0, 300.0, 400.0])
+
+        result = obv(close, volume)
+        expected = pd.Series([0.0, 200.0, -100.0, 300.0])
+        pd.testing.assert_series_equal(result, expected)
+
+    def test_vwap_matches_reference_values(self):
+        high = pd.Series([11.0, 12.0, 13.0])
+        low = pd.Series([9.0, 10.0, 11.0])
+        close = pd.Series([10.0, 11.0, 12.0])
+        volume = pd.Series([100.0, 200.0, 300.0])
+
+        result = vwap(high, low, close, volume)
+        expected = pd.Series([10.0, 10.666666666666666, 11.333333333333334])
+        np.testing.assert_allclose(result.values, expected.values, rtol=1e-10, atol=1e-10)
+
+    def test_mfi_matches_reference_values(self):
+        high = pd.Series([10.0, 12.0, 11.0, 13.0])
+        low = pd.Series([8.0, 9.0, 9.0, 10.0])
+        close = pd.Series([9.0, 11.0, 10.0, 12.0])
+        volume = pd.Series([100.0, 120.0, 80.0, 150.0])
+
+        result = mfi(high, low, close, volume, window=2)
+        expected = pd.Series([np.nan, 100.0, 61.53846153846154, 68.62745098039215])
+        np.testing.assert_allclose(result.values, expected.values, rtol=1e-10, atol=1e-10, equal_nan=True)
+
+    def test_trix_matches_reference_values(self):
+        close = pd.Series([1.0, 2.0, 3.0, 4.0, 5.0])
+
+        result = trix(close, window=2)
+        expected = pd.Series([
+            np.nan,
+            29.629629629629626,
+            45.714285714285715,
+            41.830065359477125,
+            33.58934971838196,
+        ])
+        np.testing.assert_allclose(result.values, expected.values, rtol=1e-10, atol=1e-10, equal_nan=True)
+
+    def test_adx_matches_reference_values(self):
+        high = pd.Series([10.0, 12.0, 13.0, 15.0, 16.0])
+        low = pd.Series([8.0, 9.0, 11.0, 12.0, 14.0])
+        close = pd.Series([9.0, 11.0, 12.0, 14.0, 15.0])
+
+        adx_val, plus_di, minus_di = adx(high, low, close, window=2)
+
+        expected_adx = pd.Series([np.nan, np.nan, 100.0, 100.0, 100.0])
+        expected_plus_di = pd.Series([np.nan, 40.0, 60.0, 60.0, 60.0])
+        expected_minus_di = pd.Series([np.nan, 0.0, 0.0, 0.0, 0.0])
+
+        np.testing.assert_allclose(adx_val.values, expected_adx.values, rtol=1e-10, atol=1e-10, equal_nan=True)
+        np.testing.assert_allclose(plus_di.values, expected_plus_di.values, rtol=1e-10, atol=1e-10, equal_nan=True)
+        np.testing.assert_allclose(minus_di.values, expected_minus_di.values, rtol=1e-10, atol=1e-10, equal_nan=True)
+
+    def test_dmi_matches_reference_values(self):
+        high = pd.Series([10.0, 12.0, 13.0, 15.0, 16.0])
+        low = pd.Series([8.0, 9.0, 11.0, 12.0, 14.0])
+        close = pd.Series([9.0, 11.0, 12.0, 14.0, 15.0])
+
+        pdi, mdi, dx, adx_val = dmi(high, low, close, window=2)
+
+        expected_pdi = pd.Series([np.nan, 40.0, 60.0, 60.0, 60.0])
+        expected_mdi = pd.Series([np.nan, 0.0, 0.0, 0.0, 0.0])
+        expected_dx = pd.Series([np.nan, 100.0, 100.0, 100.0, 100.0])
+        expected_adx = pd.Series([np.nan, np.nan, 100.0, 100.0, 100.0])
+
+        np.testing.assert_allclose(pdi.values, expected_pdi.values, rtol=1e-10, atol=1e-10, equal_nan=True)
+        np.testing.assert_allclose(mdi.values, expected_mdi.values, rtol=1e-10, atol=1e-10, equal_nan=True)
+        np.testing.assert_allclose(dx.values, expected_dx.values, rtol=1e-10, atol=1e-10, equal_nan=True)
+        np.testing.assert_allclose(adx_val.values, expected_adx.values, rtol=1e-10, atol=1e-10, equal_nan=True)

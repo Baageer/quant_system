@@ -3,7 +3,7 @@
 """
 import numpy as np
 import pandas as pd
-from typing import Optional
+from typing import List, Optional, Tuple
 
 from signals.indicators import bollinger_bands, sma, supertrend
 
@@ -13,7 +13,7 @@ def _is_missing(value: float) -> bool:
     return bool(np.isnan(value))
 
 
-def _validate_required_columns(data: pd.DataFrame, required_columns: list[str]) -> None:
+def _validate_required_columns(data: pd.DataFrame, required_columns: List[str]) -> None:
     missing_columns = [column for column in required_columns if column not in data.columns]
     if missing_columns:
         raise ValueError(f"Missing required columns: {', '.join(missing_columns)}")
@@ -25,7 +25,7 @@ def _create_trend_filters(
     use_trend_filter: bool,
     trend_window: int,
     trend_slope_window: int,
-) -> tuple[pd.Series, pd.Series]:
+) -> Tuple[pd.Series, pd.Series]:
     if not use_trend_filter:
         allow_long = pd.Series(True, index=data.index, dtype=bool)
         allow_short = pd.Series(True, index=data.index, dtype=bool)
@@ -453,7 +453,7 @@ class BollingerBandsStrategy:
         self.low_col = low_col
         self.volume_col = volume_col
 
-    def _required_columns(self) -> list[str]:
+    def _required_columns(self) -> List[str]:
         required_columns = [self.price_col]
         if self.mode == 'squeeze':
             required_columns.extend([self.high_col, self.low_col])

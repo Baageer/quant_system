@@ -101,6 +101,14 @@ class TestMACrossSignal:
         
         assert len(signal) == len(sample_data)
 
+    def test_signal_has_expected_golden_and_death_cross_timing(self):
+        index = pd.date_range(start='2024-01-01', periods=7, freq='D')
+        data = pd.DataFrame({'close': [5, 4, 3, 4, 5, 4, 3]}, index=index)
+
+        signal = ma_cross_signal(data, short_window=2, long_window=3)
+        expected = pd.Series([0, 0, 0, 0, 1, 1, -1], index=index)
+        pd.testing.assert_series_equal(signal, expected)
+
 
 class TestMACrossWithFilter:
     
@@ -128,6 +136,32 @@ class TestMACrossWithFilter:
         filtered_trades = (signal_filtered.diff().abs() > 0).sum()
         
         assert filtered_trades <= basic_trades
+
+    def test_filter_signal_keeps_exact_cross_timing_when_trend_confirms(self):
+        index = pd.date_range(start='2024-02-01', periods=7, freq='D')
+        data = pd.DataFrame({'close': [5, 4, 3, 4, 5, 4, 3]}, index=index)
+
+        signal = ma_cross_with_filter(
+            data,
+            short_window=2,
+            long_window=3,
+            ma_filter_window=4
+        )
+        expected = pd.Series([0, 0, 0, 0, 1, 1, -1], index=index)
+        pd.testing.assert_series_equal(signal, expected)
+
+    def test_filter_blocks_golden_cross_when_price_is_below_filter(self):
+        index = pd.date_range(start='2024-03-01', periods=5, freq='D')
+        data = pd.DataFrame({'close': [10, 10, 1, 2, 3]}, index=index)
+
+        signal = ma_cross_with_filter(
+            data,
+            short_window=2,
+            long_window=3,
+            ma_filter_window=4
+        )
+        expected = pd.Series([0, 0, 0, 0, 0], index=index)
+        pd.testing.assert_series_equal(signal, expected)
 
 
 class TestMACrossStrategy:

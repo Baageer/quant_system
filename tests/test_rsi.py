@@ -4,6 +4,7 @@ RSI策略测试
 import pytest
 import pandas as pd
 import numpy as np
+import signals.timing.rsi as rsi_module
 from signals.timing.rsi import (
     calculate_rsi,
     rsi_signal,
@@ -148,6 +149,19 @@ class TestRSICrossSignal:
         
         assert isinstance(signal, pd.Series)
 
+    def test_cross_signal_has_expected_entry_exit_timing(self, monkeypatch):
+        index = pd.date_range(start='2024-01-01', periods=9, freq='D')
+        data = pd.DataFrame({'close': np.arange(9)}, index=index)
+
+        def fake_calculate_rsi(prices, window=14):
+            return pd.Series([np.nan, 25, 35, 45, 55, 75, 65, 45, 55], index=prices.index)
+
+        monkeypatch.setattr(rsi_module, 'calculate_rsi', fake_calculate_rsi)
+
+        signal = rsi_cross_signal(data, window=14, oversold=30, overbought=70)
+        expected = pd.Series([0, 0, 1, 1, 1, 1, -1, -1, 0], index=index)
+        pd.testing.assert_series_equal(signal, expected)
+
 
 class TestRSIDivergenceSignal:
     
@@ -164,6 +178,32 @@ class TestRSIDivergenceSignal:
         signal = rsi_divergence_signal(divergence_data, window=14, lookback=5)
         
         assert isinstance(signal, pd.Series)
+
+    def test_divergence_signal_detects_bull_divergence_and_exit(self, monkeypatch):
+        index = pd.date_range(start='2024-02-01', periods=7, freq='D')
+        data = pd.DataFrame({'close': [10, 9, 8, 9, 7, 8, 8.5]}, index=index)
+
+        def fake_calculate_rsi(prices, window=14):
+            return pd.Series([40, 30, 20, 25, 30, 35, 80], index=prices.index)
+
+        monkeypatch.setattr(rsi_module, 'calculate_rsi', fake_calculate_rsi)
+
+        signal = rsi_divergence_signal(data, window=14, lookback=2)
+        expected = pd.Series([0, 0, 0, 0, 0, 1, 0], index=index)
+        pd.testing.assert_series_equal(signal, expected)
+
+    def test_divergence_signal_detects_bear_divergence_and_exit(self, monkeypatch):
+        index = pd.date_range(start='2024-03-01', periods=7, freq='D')
+        data = pd.DataFrame({'close': [10, 11, 12, 11, 13, 12, 11]}, index=index)
+
+        def fake_calculate_rsi(prices, window=14):
+            return pd.Series([60, 70, 80, 75, 70, 65, 20], index=prices.index)
+
+        monkeypatch.setattr(rsi_module, 'calculate_rsi', fake_calculate_rsi)
+
+        signal = rsi_divergence_signal(data, window=14, lookback=2)
+        expected = pd.Series([0, 0, 0, 0, 0, -1, 0], index=index)
+        pd.testing.assert_series_equal(signal, expected)
 
 
 class TestRSIStrategy:

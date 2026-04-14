@@ -48,7 +48,7 @@ def wma(data: pd.Series, window: int) -> pd.Series:
     """
     weights = np.arange(1, window + 1)
     return data.rolling(window=window, min_periods=window).apply(
-        lambda x: np.dot(x, weights) / weights.sum(), raw=True
+        lambda x: np.dot(x, weights) / weights.sum()
     )
 
 
@@ -260,7 +260,7 @@ def cci(
     tp = (high + low + close) / 3
     ma = tp.rolling(window=window, min_periods=window).mean()
     md = tp.rolling(window=window, min_periods=window).apply(
-        lambda x: np.abs(x - x.mean()).mean(), raw=True
+        lambda x: np.abs(x - x.mean()).mean()
     )
     
     return (tp - ma) / (0.015 * md)
@@ -636,23 +636,48 @@ def supertrend(
         (SuperTrend值, 趋势方向: 1=上涨, -1=下跌)
     """
     atr_val = atr(high, low, close, atr_period)
-    
+
     hl2 = (high + low) / 2
     upper_band = hl2 + multiplier * atr_val
     lower_band = hl2 - multiplier * atr_val
-    
-    supertrend_val = pd.Series(index=close.index, dtype=float)
-    direction = pd.Series(index=close.index, dtype=int)
-    
-    supertrend_val.iloc[0] = upper_band.iloc[0]
-    direction.iloc[0] = 1
-    
-    for i in range(1, len(close)):
-        if close.iloc[i] > supertrend_val.iloc[i-1]:
+
+    supertrend_val = pd.Series(np.nan, index=close.index, dtype=float)
+    direction = pd.Series(np.nan, index=close.index, dtype=float)
+
+    valid_atr = atr_val == atr_val
+    if not valid_atr.any():
+        return supertrend_val, direction
+
+    start = np.argmax(valid_atr.values)
+    if start > 0 and close.iloc[start] < close.iloc[start - 1]:
+        direction.iloc[start] = -1
+        supertrend_val.iloc[start] = upper_band.iloc[start]
+    else:
+        direction.iloc[start] = 1
+        supertrend_val.iloc[start] = lower_band.iloc[start]
+
+    for i in range(start + 1, len(close)):
+        if atr_val.iloc[i] != atr_val.iloc[i]:
+            continue
+
+        prev_supertrend = supertrend_val.iloc[i - 1]
+        prev_direction = direction.iloc[i - 1]
+
+        if prev_supertrend != prev_supertrend or prev_direction != prev_direction:
+            prev_supertrend = supertrend_val.iloc[start]
+            prev_direction = direction.iloc[start]
+
+        if close.iloc[i] > prev_supertrend:
             direction.iloc[i] = 1
-            supertrend_val.iloc[i] = max(lower_band.iloc[i], supertrend_val.iloc[i-1])
+            if prev_direction > 0:
+                supertrend_val.iloc[i] = max(lower_band.iloc[i], prev_supertrend)
+            else:
+                supertrend_val.iloc[i] = lower_band.iloc[i]
         else:
             direction.iloc[i] = -1
-            supertrend_val.iloc[i] = min(upper_band.iloc[i], supertrend_val.iloc[i-1])
-    
+            if prev_direction < 0:
+                supertrend_val.iloc[i] = min(upper_band.iloc[i], prev_supertrend)
+            else:
+                supertrend_val.iloc[i] = upper_band.iloc[i]
+
     return supertrend_val, direction

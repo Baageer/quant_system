@@ -4,6 +4,7 @@ MACD策略测试
 import pytest
 import pandas as pd
 import numpy as np
+import signals.timing.macd as macd_module
 from signals.timing.macd import (
     calculate_macd,
     macd_cross_signal,
@@ -203,6 +204,40 @@ class TestMACDCombinedSignal:
         
         assert isinstance(signal_cross, pd.Series)
         assert isinstance(signal_combined, pd.Series)
+
+    def test_combined_signal_has_deterministic_cross_timing(self, monkeypatch):
+        index = pd.date_range(start='2024-01-01', periods=7, freq='D')
+        data = pd.DataFrame({'close': np.arange(7)}, index=index)
+
+        def fake_calculate_macd(prices, fast_period=12, slow_period=26, signal_period=9):
+            return (
+                pd.Series([-0.5, -0.4, -0.2, 0.2, 0.4, 0.2, -0.1], index=prices.index),
+                pd.Series([-0.4, -0.45, -0.3, 0.1, 0.3, 0.25, 0.0], index=prices.index),
+                pd.Series(0.0, index=prices.index),
+            )
+
+        monkeypatch.setattr(macd_module, 'calculate_macd', fake_calculate_macd)
+
+        signal = macd_combined_signal(data)
+        expected = pd.Series([0, 1, 1, 1, 1, -1, -1], index=index)
+        pd.testing.assert_series_equal(signal, expected)
+
+    def test_combined_signal_ignores_zero_axis_move_without_cross(self, monkeypatch):
+        index = pd.date_range(start='2024-02-01', periods=4, freq='D')
+        data = pd.DataFrame({'close': np.arange(4)}, index=index)
+
+        def fake_calculate_macd(prices, fast_period=12, slow_period=26, signal_period=9):
+            return (
+                pd.Series([-0.3, 0.1, 0.2, 0.4], index=prices.index),
+                pd.Series([-0.4, 0.0, 0.1, 0.3], index=prices.index),
+                pd.Series(0.0, index=prices.index),
+            )
+
+        monkeypatch.setattr(macd_module, 'calculate_macd', fake_calculate_macd)
+
+        signal = macd_combined_signal(data)
+        expected = pd.Series([0, 0, 0, 0], index=index)
+        pd.testing.assert_series_equal(signal, expected)
 
 
 class TestMACDStrategy:
