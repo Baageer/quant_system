@@ -5,7 +5,7 @@ project:
 
 data:
   source: "akshare"
-  adjust_mode: "qfq"
+  adjust_mode: "hfq"
   stock_file: "./data/HS300.txt"
   cache_dir: "./data/raw"
   processed_dir: "./data/processed"
