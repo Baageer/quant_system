@@ -296,6 +296,8 @@ class BacktestEngine:
             
             if entry_price is None:
                 continue
+
+            holding_days = self._get_holding_days(df, symbol, date)
             
             self.position_high_prices[symbol] = max(highest_price, current_high)
             
@@ -311,8 +313,12 @@ class BacktestEngine:
                 self.stop_loss_strategy.update_stop_price(
                     self.position_high_prices[symbol],
                     stop_loss_atr,
+                    holding_days,
                 )
-                if self.stop_loss_strategy.check_stop_loss(current_price):
+                if self.stop_loss_strategy.check_stop_loss(
+                    current_price,
+                    holding_days=holding_days,
+                ):
                     stop_signals[symbol] = {
                         'action': 'sell',
                         'shares': self.positions[symbol],
@@ -335,8 +341,12 @@ class BacktestEngine:
                     current_price,
                     self.position_high_prices[symbol],
                     stop_profit_atr,
+                    holding_days,
                 )
-                if self.stop_profit_strategy.check_stop_profit(current_price):
+                if self.stop_profit_strategy.check_stop_profit(
+                    current_price,
+                    holding_days=holding_days,
+                ):
                     stop_signals[symbol] = {
                         'action': 'sell',
                         'shares': self.positions[symbol],
@@ -438,6 +448,7 @@ class BacktestEngine:
                     old_cost = self.position_costs.get(symbol, 0)
                     
                     self.positions[symbol] = old_shares + shares
+                    self.last_buy_dates[symbol] = date
                     
                     if old_shares > 0:
                         total_cost = old_cost + cost
@@ -484,6 +495,8 @@ class BacktestEngine:
                             del self.position_entry_prices[symbol]
                         if symbol in self.position_high_prices:
                             del self.position_high_prices[symbol]
+                        if symbol in self.last_buy_dates:
+                            del self.last_buy_dates[symbol]
                     
                     self.trades.append({
                         'date': date,

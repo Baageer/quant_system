@@ -1,7 +1,13 @@
 import importlib
+import inspect
 from typing import Iterable, List, Optional, Tuple
 
 import yaml
+from signals.timing.common_filters import (
+    FilteredTimingStrategy,
+    extract_common_timing_filter_params,
+    has_common_timing_filters_enabled,
+)
 
 
 class StrategyLoader:
@@ -33,13 +39,51 @@ class StrategyLoader:
     def get_stop_strategy(self, strategy_name: str):
         return self._get_strategy_class("stop_strategies", strategy_name, optional=True)
 
+    @staticmethod
+    def _filter_constructor_params(strategy_class, params: dict) -> dict:
+        """
+        Keep only params accepted by strategy __init__.
+
+        This lets YAML carry reusable, external filter params without forcing
+        every strategy class to declare them.
+        """
+        signature = inspect.signature(strategy_class.__init__)
+        accepts_kwargs = any(
+            p.kind == inspect.Parameter.VAR_KEYWORD
+            for p in signature.parameters.values()
+        )
+        if accepts_kwargs:
+            return dict(params)
+
+        accepted = {
+            name
+            for name, p in signature.parameters.items()
+            if name != "self"
+            and p.kind
+            in (
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.KEYWORD_ONLY,
+            )
+        }
+        return {key: value for key, value in params.items() if key in accepted}
+
     def build_timing_strategies(self, strategy_names: Iterable[str]) -> Tuple[List[object], List[dict]]:
         strategies = []
         strategy_infos = []
 
         for strategy_name in strategy_names:
             strategy_class, strategy_info = self.get_strategy(strategy_name)
-            strategies.append(strategy_class(**strategy_info["params"]))
+            strategy_params = strategy_info.get("params", {})
+            constructor_params = self._filter_constructor_params(
+                strategy_class, strategy_params
+            )
+            strategy = strategy_class(**constructor_params)
+
+            common_filter_params = extract_common_timing_filter_params(strategy_params)
+            if has_common_timing_filters_enabled(common_filter_params):
+                strategy = FilteredTimingStrategy(strategy, common_filter_params)
+
+            strategies.append(strategy)
             strategy_infos.append(strategy_info)
 
         return strategies, strategy_infos

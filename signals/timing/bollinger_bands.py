@@ -457,8 +457,6 @@ class BollingerBandsStrategy:
         required_columns = [self.price_col]
         if self.mode == 'squeeze':
             required_columns.extend([self.high_col, self.low_col])
-        if self.use_volume_filter:
-            required_columns.append(self.volume_col)
         return list(dict.fromkeys(required_columns))
 
     def generate_signal(self, data: pd.DataFrame) -> pd.Series:
@@ -492,13 +490,6 @@ class BollingerBandsStrategy:
                 squeeze_quantile=self.squeeze_quantile,
                 squeeze_lookback=self.squeeze_lookback,
                 use_supertrend_filter=self.use_supertrend_filter,
-                use_trend_filter=self.use_trend_filter,
-                trend_window=self.trend_window,
-                trend_slope_window=self.trend_slope_window,
-                use_volume_filter=self.use_volume_filter,
-                volume_window=self.volume_window,
-                volume_multiplier=self.volume_multiplier,
-                volume_col=self.volume_col,
                 signal_delay=self.signal_delay,
             )
 
@@ -509,13 +500,6 @@ class BollingerBandsStrategy:
                 num_std=self.num_std,
                 confirm_bars=self.confirm_bars,
                 price_col=self.price_col,
-                use_trend_filter=self.use_trend_filter,
-                trend_window=self.trend_window,
-                trend_slope_window=self.trend_slope_window,
-                use_volume_filter=self.use_volume_filter,
-                volume_window=self.volume_window,
-                volume_multiplier=self.volume_multiplier,
-                volume_col=self.volume_col,
                 signal_delay=self.signal_delay,
             )
 
@@ -524,13 +508,6 @@ class BollingerBandsStrategy:
             window=self.window,
             num_std=self.num_std,
             price_col=self.price_col,
-            use_trend_filter=self.use_trend_filter,
-            trend_window=self.trend_window,
-            trend_slope_window=self.trend_slope_window,
-            use_volume_filter=self.use_volume_filter,
-            volume_window=self.volume_window,
-            volume_multiplier=self.volume_multiplier,
-            volume_col=self.volume_col,
             signal_delay=self.signal_delay,
         )
 

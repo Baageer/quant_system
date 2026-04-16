@@ -109,3 +109,55 @@ def test_engine_applies_atr_stop_loss():
     assert list(trades["action"]) == ["buy", "sell"]
     assert trades.iloc[1]["reason"] == "stop_loss"
     assert trades.iloc[1]["date"] == data["AAA"].index[2]
+
+
+def test_engine_applies_holding_day_stop_loss():
+    data = {"AAA": make_stop_test_data()}
+    engine = BacktestEngine(initial_capital=100000.0, commission_rate=0.0, slippage=0.0)
+    engine.set_stop_strategies(
+        stop_loss_strategy=StopLossStrategy(
+            loss_type="holding_day",
+            holding_day=2,
+        )
+    )
+
+    state = {"bought": False}
+
+    def strategy_func(date, data, positions):
+        if not state["bought"]:
+            state["bought"] = True
+            return {"AAA": {"action": "buy", "shares": 1}}
+        return {}
+
+    engine.run(data, strategy_func, show_progress=False)
+
+    trades = engine.get_trades()
+    assert list(trades["action"]) == ["buy", "sell"]
+    assert trades.iloc[1]["reason"] == "stop_loss"
+    assert trades.iloc[1]["date"] == data["AAA"].index[2]
+
+
+def test_engine_applies_holding_day_stop_profit():
+    data = {"AAA": make_stop_test_data()}
+    engine = BacktestEngine(initial_capital=100000.0, commission_rate=0.0, slippage=0.0)
+    engine.set_stop_strategies(
+        stop_profit_strategy=StopProfitStrategy(
+            profit_type="holding_day",
+            holding_day=2,
+        )
+    )
+
+    state = {"bought": False}
+
+    def strategy_func(date, data, positions):
+        if not state["bought"]:
+            state["bought"] = True
+            return {"AAA": {"action": "buy", "shares": 1}}
+        return {}
+
+    engine.run(data, strategy_func, show_progress=False)
+
+    trades = engine.get_trades()
+    assert list(trades["action"]) == ["buy", "sell"]
+    assert trades.iloc[1]["reason"] == "stop_profit"
+    assert trades.iloc[1]["date"] == data["AAA"].index[2]

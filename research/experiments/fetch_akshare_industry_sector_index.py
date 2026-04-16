@@ -76,7 +76,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--sleep-seconds",
         type=float,
-        default=0.5,
+        default=2,
         help="Sleep seconds between requests. Default: 0.5",
     )
     parser.add_argument(
@@ -175,7 +175,7 @@ def main() -> int:
                             period="\u65e5k",
                             adjust=args.adjust,
                         )
-                        time.sleep(3)
+
                         if hist_df is not None and not hist_df.empty:
                             break
                     except Exception as inner_exc:  # noqa: BLE001

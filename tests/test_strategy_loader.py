@@ -1,4 +1,8 @@
+import pandas as pd
+import pytest
+
 from signals.strategy_loader import StrategyLoader
+from signals.timing.common_filters import FilteredTimingStrategy
 
 
 class TestStrategyLoader:
@@ -53,3 +57,23 @@ class TestStrategyLoader:
             assert "timing_strategies" in str(exc)
         else:
             raise AssertionError("Expected ValueError for missing strategy")
+
+    def test_common_filters_wrap_strategy_when_enabled(self):
+        loader = StrategyLoader("./config/strategies.yaml")
+        loader.config["timing_strategies"]["ma_cross"]["params"]["use_trend_filter"] = True
+        loader.config["timing_strategies"]["ma_cross"]["params"]["trend_window"] = 5
+        loader.config["timing_strategies"]["ma_cross"]["params"]["trend_slope_window"] = 1
+
+        strategies, _ = loader.build_timing_strategies(["ma_cross"])
+
+        assert isinstance(strategies[0], FilteredTimingStrategy)
+
+    def test_common_volume_filter_validates_required_columns(self):
+        loader = StrategyLoader("./config/strategies.yaml")
+        loader.config["timing_strategies"]["ma_cross"]["params"]["use_volume_filter"] = True
+
+        strategies, _ = loader.build_timing_strategies(["ma_cross"])
+        df = pd.DataFrame({"close": [10, 11, 12, 13, 14]})
+
+        with pytest.raises(ValueError, match="Missing required columns for common filters"):
+            strategies[0].generate_signal(df)

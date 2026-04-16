@@ -57,6 +57,31 @@ def create_strategy_function(trade_amount):
     return strategy_func
 
 
+def calculate_annual_portfolio_returns(results: pd.DataFrame) -> pd.Series:
+    """Calculate annual portfolio returns from portfolio net value."""
+    if results.empty or "portfolio_value" not in results.columns:
+        return pd.Series(dtype=float)
+
+    portfolio_value = results["portfolio_value"].copy()
+    if not isinstance(portfolio_value.index, pd.DatetimeIndex):
+        parsed_index = pd.to_datetime(portfolio_value.index, errors="coerce")
+        valid_mask = ~parsed_index.isna()
+        portfolio_value = portfolio_value.loc[valid_mask]
+        portfolio_value.index = parsed_index[valid_mask]
+
+    portfolio_value = portfolio_value.sort_index().dropna()
+    if portfolio_value.empty:
+        return pd.Series(dtype=float)
+
+    grouped = portfolio_value.groupby(portfolio_value.index.year)
+    year_start_values = grouped.first()
+    year_end_values = grouped.last()
+
+    annual_returns = (year_end_values / year_start_values - 1) * 100
+    annual_returns = annual_returns.replace([np.inf, -np.inf], np.nan).dropna()
+    return annual_returns.sort_index()
+
+
 def run_backtest(
     strategy_name: Union[str, List[str]],
     start_date: str = None,
@@ -298,6 +323,11 @@ def run_backtest(
     logger.info(f"Initial capital: {initial_capital:,.2f}")
     logger.info(f"Final portfolio value: {total_cash:,.2f}")
     logger.info(f"Total return: {total_return:.2f}%")
+    annual_portfolio_returns = calculate_annual_portfolio_returns(results)
+    if not annual_portfolio_returns.empty:
+        logger.info("Annual portfolio return:")
+        for year, annual_return in annual_portfolio_returns.items():
+            logger.info(f"  {int(year)}: {annual_return:.2f}%")
     logger.info(f"Sharpe ratio: {sharpe:.4f}")
     logger.info(f"Max drawdown: {max_drawdown:.2f}%")
     logger.info(f"Trade count: {total_trades}")

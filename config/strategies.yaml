@@ -8,6 +8,12 @@ timing_strategies:
       long_window: 20
       use_filter: true
       ma_filter_window: 30
+      use_trend_filter: false
+      trend_window: 60
+      trend_slope_window: 3
+      use_volume_filter: true
+      volume_window: 20
+      volume_multiplier: 1.5
     min_data_length: 30
     description: "短期均线上穿长期均线做多，下穿做空"
   
@@ -20,6 +26,12 @@ timing_strategies:
       oversold: 30
       overbought: 70
       mode: "standard"
+      use_trend_filter: false
+      trend_window: 60
+      trend_slope_window: 3
+      use_volume_filter: false
+      volume_window: 20
+      volume_multiplier: 1.2
     min_data_length: 20
     description: "RSI超卖做多，超买卖出"
   
@@ -32,6 +44,12 @@ timing_strategies:
       oversold: 30
       overbought: 70
       mode: "cross"
+      use_trend_filter: false
+      trend_window: 60
+      trend_slope_window: 3
+      use_volume_filter: false
+      volume_window: 20
+      volume_multiplier: 1.2
     min_data_length: 20
     description: "RSI穿越超卖超买线产生信号"
   
@@ -44,6 +62,12 @@ timing_strategies:
       slow_period: 26
       signal_period: 9
       mode: "cross"
+      use_trend_filter: false
+      trend_window: 60
+      trend_slope_window: 3
+      use_volume_filter: false
+      volume_window: 20
+      volume_multiplier: 1.2
     min_data_length: 35
     description: "MACD金叉做多，死叉做空"
   
@@ -56,6 +80,12 @@ timing_strategies:
       slow_period: 26
       signal_period: 9
       mode: "histogram"
+      use_trend_filter: false
+      trend_window: 60
+      trend_slope_window: 3
+      use_volume_filter: false
+      volume_window: 20
+      volume_multiplier: 1.2
     min_data_length: 35
     description: "MACD柱状图由负转正做多，由正转负做空"
   
@@ -91,10 +121,12 @@ timing_strategies:
     module: "signals.timing.bollinger_bands"
     class: "BollingerBandsStrategy"
     params:
-      window: 20
+      window: 30
       num_std: 2.0
       mode: "squeeze"
-      squeeze_threshold: 0.1
+      squeeze_threshold: None
+      squeeze_quantile: 0.1
+      squeeze_lookback: 60
       use_trend_filter: false
       trend_window: 60
       use_volume_filter: true
@@ -178,7 +210,7 @@ stop_strategies:
     class: "StopLossStrategy"
     params:
       loss_pct: 0.060
-      loss_type: "holding_day"
+      loss_type: "atr"
       holding_day: 20
       atr_window: 14
       atr_multiplier: 1
@@ -191,7 +223,7 @@ stop_strategies:
     class: "StopProfitStrategy"
     params:
       profit_pct: 0.07500
-      profit_type: "holding_day"
+      profit_type: "trailing"
       holding_day: 20
       atr_window: 14
       atr_multiplier: 2
