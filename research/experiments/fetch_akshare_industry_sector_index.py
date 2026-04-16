@@ -175,6 +175,7 @@ def main() -> int:
                             period="\u65e5k",
                             adjust=args.adjust,
                         )
+                        time.sleep(3)
                         if hist_df is not None and not hist_df.empty:
                             break
                     except Exception as inner_exc:  # noqa: BLE001
