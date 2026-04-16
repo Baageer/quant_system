@@ -12,6 +12,11 @@ class ProfitType(Enum):
     ABSOLUTE = "absolute"
     TRAILING = "trailing"
     ATR_BASED = "atr"
+    HOLDING_DAY = "holding_day"
+
+
+def _is_holding_day_type(profit_type: str) -> bool:
+    return profit_type in {ProfitType.HOLDING_DAY.value, "holding_days"}
 
 
 def calculate_stop_profit_price(
@@ -48,6 +53,8 @@ def calculate_stop_profit_price(
         if atr is None:
             return entry_price * (1 + profit_pct)
         return entry_price + atr * atr_multiplier
+    elif _is_holding_day_type(profit_type):
+        return np.nan
     else:
         return entry_price * (1 + profit_pct)
 
@@ -57,6 +64,7 @@ def stop_profit_signal(
     entry_price: float,
     profit_pct: float = 0.06,
     profit_type: str = "absolute",
+    holding_day: Optional[int] = None,
     price_col: str = 'close',
     low_col: str = 'low',
     high_col: str = 'high',
@@ -81,7 +89,11 @@ def stop_profit_signal(
     prices = data[price_col]
     signals = pd.Series(0, index=data.index)
     
-    if profit_type == "trailing":
+    if _is_holding_day_type(profit_type):
+        if holding_day is None or int(holding_day) <= 0:
+            raise ValueError("holding_day must be a positive integer when profit_type='holding_day'.")
+        signals.iloc[int(holding_day):] = 1
+    elif profit_type == "trailing":
         lowest_price = entry_price
         for i in range(len(data)):
             current_low = data[low_col].iloc[i]
@@ -152,6 +164,7 @@ class StopProfitStrategy:
         self,
         profit_pct: float = 0.06,
         profit_type: str = "absolute",
+        holding_day: Optional[int] = None,
         atr_window: int = 14,
         atr_multiplier: float = 2.0
     ):
@@ -167,16 +180,28 @@ class StopProfitStrategy:
         """
         self.profit_pct = profit_pct
         self.profit_type = profit_type
+        self.holding_day = int(holding_day) if holding_day is not None else None
         self.atr_window = atr_window
         self.atr_multiplier = atr_multiplier
+
+        if _is_holding_day_type(self.profit_type):
+            if self.holding_day is None or self.holding_day <= 0:
+                raise ValueError(
+                    "holding_day must be a positive integer when profit_type='holding_day'."
+                )
         
         self.entry_price: Optional[float] = None
+        self.entry_date: Optional[pd.Timestamp] = None
         self.highest_price: Optional[float] = None
         self.profit_price: Optional[float] = None
         self.position_active: bool = False
         self.profit_reached: bool = False
     
-    def set_position(self, entry_price: float):
+    def set_position(
+        self,
+        entry_price: float,
+        entry_date: Optional[pd.Timestamp] = None,
+    ):
         """
         设置持仓信息
         
@@ -184,24 +209,34 @@ class StopProfitStrategy:
             entry_price: 入场价格
         """
         self.entry_price = entry_price
+        self.entry_date = entry_date
         self.highest_price = entry_price
         self.position_active = True
         self.profit_reached = False
         
         if self.profit_type == "absolute":
             self.profit_price = entry_price * (1 + self.profit_pct)
+        elif _is_holding_day_type(self.profit_type):
+            self.profit_price = None
         elif self.profit_type == "atr":
             self.profit_price = None
     
     def clear_position(self):
         """清除持仓信息"""
         self.entry_price = None
+        self.entry_date = None
         self.highest_price = None
         self.profit_price = None
         self.position_active = False
         self.profit_reached = False
     
-    def update_profit_price(self, current_price: float, current_high: float, atr: Optional[float] = None):
+    def update_profit_price(
+        self,
+        current_price: float,
+        current_high: float,
+        atr: Optional[float] = None,
+        holding_days: Optional[int] = None,
+    ):
         """
         更新止盈价格
         
@@ -216,14 +251,20 @@ class StopProfitStrategy:
         if current_high > self.highest_price:
             self.highest_price = current_high
         
-        if self.profit_type == "trailing":
+        if _is_holding_day_type(self.profit_type):
+            self.profit_reached = holding_days is not None and holding_days >= self.holding_day
+        elif self.profit_type == "trailing":
             if self.highest_price >= self.entry_price * (1 + self.profit_pct):
                 self.profit_reached = True
                 self.profit_price = self.highest_price * (1 - self.profit_pct)
         elif self.profit_type == "atr" and atr is not None:
             self.profit_price = self.entry_price + atr * self.atr_multiplier
     
-    def check_stop_profit(self, current_price: float) -> bool:
+    def check_stop_profit(
+        self,
+        current_price: float,
+        holding_days: Optional[int] = None,
+    ) -> bool:
         """
         检查是否触发止盈
         
@@ -236,6 +277,8 @@ class StopProfitStrategy:
         if not self.position_active:
             return False
         
+        if _is_holding_day_type(self.profit_type):
+            return holding_days is not None and holding_days >= self.holding_day
         if self.profit_type == "trailing":
             if self.profit_reached and self.profit_price is not None:
                 return current_price <= self.profit_price
@@ -262,6 +305,11 @@ class StopProfitStrategy:
         
         prices = data['close']
         highs = data['high'] if 'high' in data.columns else prices
+
+        if _is_holding_day_type(self.profit_type):
+            if self.holding_day < len(data):
+                signals.iloc[self.holding_day] = -1
+            return signals
         
         if self.profit_type == "atr":
             atr = calculate_atr(data, self.atr_window)
@@ -293,10 +341,12 @@ class StopProfitStrategy:
         """
         return {
             'entry_price': self.entry_price,
+            'entry_date': self.entry_date,
             'highest_price': self.highest_price,
             'profit_price': self.profit_price,
             'profit_pct': self.profit_pct,
             'profit_type': self.profit_type,
+            'holding_day': self.holding_day,
             'position_active': self.position_active,
             'profit_reached': self.profit_reached,
             'current_profit_pct': (

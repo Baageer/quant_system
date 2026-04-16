@@ -95,10 +95,10 @@ timing_strategies:
       num_std: 2.0
       mode: "squeeze"
       squeeze_threshold: 0.1
-      use_trend_filter: true
+      use_trend_filter: false
       trend_window: 60
       use_volume_filter: true
-      volume_window: 20
+      volume_window: 60
       volume_multiplier: 2
     min_data_length: 25
     description: "布林带收窄后结合趋势与放量确认突破方向"
@@ -178,7 +178,8 @@ stop_strategies:
     class: "StopLossStrategy"
     params:
       loss_pct: 0.060
-      loss_type: "atr"
+      loss_type: "holding_day"
+      holding_day: 20
       atr_window: 14
       atr_multiplier: 1
     min_data_length: 20
@@ -190,7 +191,8 @@ stop_strategies:
     class: "StopProfitStrategy"
     params:
       profit_pct: 0.07500
-      profit_type: "trailing"
+      profit_type: "holding_day"
+      holding_day: 20
       atr_window: 14
       atr_multiplier: 2
     min_data_length: 20

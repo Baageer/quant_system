@@ -12,6 +12,11 @@ class LossType(Enum):
     ABSOLUTE = "absolute"
     TRAILING = "trailing"
     ATR_BASED = "atr"
+    HOLDING_DAY = "holding_day"
+
+
+def _is_holding_day_type(loss_type: str) -> bool:
+    return loss_type in {LossType.HOLDING_DAY.value, "holding_days"}
 
 
 def calculate_stop_loss_price(
@@ -48,6 +53,8 @@ def calculate_stop_loss_price(
         if atr is None:
             return entry_price * (1 - loss_pct)
         return entry_price - atr * atr_multiplier
+    elif _is_holding_day_type(loss_type):
+        return np.nan
     else:
         return entry_price * (1 - loss_pct)
 
@@ -57,6 +64,7 @@ def stop_loss_signal(
     entry_price: float,
     loss_pct: float = 0.06,
     loss_type: str = "absolute",
+    holding_day: Optional[int] = None,
     price_col: str = 'close',
     high_col: str = 'high',
     low_col: str = 'low',
@@ -81,7 +89,11 @@ def stop_loss_signal(
     prices = data[price_col]
     signals = pd.Series(0, index=data.index)
     
-    if loss_type == "trailing":
+    if _is_holding_day_type(loss_type):
+        if holding_day is None or int(holding_day) <= 0:
+            raise ValueError("holding_day must be a positive integer when loss_type='holding_day'.")
+        signals.iloc[int(holding_day):] = 1
+    elif loss_type == "trailing":
         highest_price = entry_price
         for i in range(len(data)):
             current_high = data[high_col].iloc[i]
@@ -152,6 +164,7 @@ class StopLossStrategy:
         self,
         loss_pct: float = 0.06,
         loss_type: str = "absolute",
+        holding_day: Optional[int] = None,
         atr_window: int = 14,
         atr_multiplier: float = 2.0
     ):
@@ -167,15 +180,27 @@ class StopLossStrategy:
         """
         self.loss_pct = loss_pct
         self.loss_type = loss_type
+        self.holding_day = int(holding_day) if holding_day is not None else None
         self.atr_window = atr_window
         self.atr_multiplier = atr_multiplier
+
+        if _is_holding_day_type(self.loss_type):
+            if self.holding_day is None or self.holding_day <= 0:
+                raise ValueError(
+                    "holding_day must be a positive integer when loss_type='holding_day'."
+                )
         
         self.entry_price: Optional[float] = None
+        self.entry_date: Optional[pd.Timestamp] = None
         self.highest_price: Optional[float] = None
         self.stop_price: Optional[float] = None
         self.position_active: bool = False
     
-    def set_position(self, entry_price: float):
+    def set_position(
+        self,
+        entry_price: float,
+        entry_date: Optional[pd.Timestamp] = None,
+    ):
         """
         设置持仓信息
         
@@ -183,22 +208,31 @@ class StopLossStrategy:
             entry_price: 入场价格
         """
         self.entry_price = entry_price
+        self.entry_date = entry_date
         self.highest_price = entry_price
         self.position_active = True
         
         if self.loss_type == "absolute":
             self.stop_price = entry_price * (1 - self.loss_pct)
+        elif _is_holding_day_type(self.loss_type):
+            self.stop_price = None
         elif self.loss_type == "atr":
             self.stop_price = None
     
     def clear_position(self):
         """清除持仓信息"""
         self.entry_price = None
+        self.entry_date = None
         self.highest_price = None
         self.stop_price = None
         self.position_active = False
     
-    def update_stop_price(self, current_high: float, atr: Optional[float] = None):
+    def update_stop_price(
+        self,
+        current_high: float,
+        atr: Optional[float] = None,
+        holding_days: Optional[int] = None,
+    ):
         """
         更新止损价格
         
@@ -209,6 +243,8 @@ class StopLossStrategy:
         if not self.position_active or self.entry_price is None:
             return
         
+        if _is_holding_day_type(self.loss_type):
+            return
         if self.loss_type == "trailing":
             if current_high > self.highest_price:
                 self.highest_price = current_high
@@ -216,7 +252,11 @@ class StopLossStrategy:
         elif self.loss_type == "atr" and atr is not None:
             self.stop_price = self.entry_price - atr * self.atr_multiplier
     
-    def check_stop_loss(self, current_price: float) -> bool:
+    def check_stop_loss(
+        self,
+        current_price: float,
+        holding_days: Optional[int] = None,
+    ) -> bool:
         """
         检查是否触发止损
         
@@ -226,7 +266,11 @@ class StopLossStrategy:
         返回:
             是否触发止损
         """
-        if not self.position_active or self.stop_price is None:
+        if not self.position_active:
+            return False
+        if _is_holding_day_type(self.loss_type):
+            return holding_days is not None and holding_days >= self.holding_day
+        if self.stop_price is None:
             return False
         return current_price <= self.stop_price
     
@@ -247,6 +291,11 @@ class StopLossStrategy:
         
         prices = data['close']
         highs = data['high'] if 'high' in data.columns else prices
+
+        if _is_holding_day_type(self.loss_type):
+            if self.holding_day < len(data):
+                signals.iloc[self.holding_day] = -1
+            return signals
         
         if self.loss_type == "atr":
             atr = calculate_atr(data, self.atr_window)
@@ -278,9 +327,11 @@ class StopLossStrategy:
         """
         return {
             'entry_price': self.entry_price,
+            'entry_date': self.entry_date,
             'highest_price': self.highest_price,
             'stop_price': self.stop_price,
             'loss_pct': self.loss_pct,
             'loss_type': self.loss_type,
+            'holding_day': self.holding_day,
             'position_active': self.position_active
         }

@@ -167,26 +167,26 @@ class DataAPI:
         """Save raw data to cache."""
         cache_dir = self._build_storage_dir(self.cache_dir, data_type)
         filepath = os.path.join(cache_dir, filename)
-        data.to_csv(filepath, index=True, encoding="utf-8-sig")
+        data.to_csv(filepath, index=True)
 
     def load_from_cache(self, filename: str, data_type: str = "price") -> pd.DataFrame:
         """Load cached data if it exists."""
         cache_dir = self._build_storage_dir(self.cache_dir, data_type)
         filepath = os.path.join(cache_dir, filename)
         if os.path.exists(filepath):
-            return pd.read_csv(filepath, index_col=0, encoding="utf-8-sig")
+            return pd.read_csv(filepath, index_col=0)
         return None
 
     def save_processed(self, data: pd.DataFrame, filename: str, data_type: str = "price"):
         """Save processed data."""
         processed_dir = self._build_storage_dir(self.processed_dir, data_type)
         filepath = os.path.join(processed_dir, filename)
-        data.to_csv(filepath, index=True, encoding="utf-8-sig")
+        data.to_csv(filepath, index=True)
 
     def load_processed(self, filename: str, data_type: str = "price") -> pd.DataFrame:
         """Load processed data if it exists."""
         processed_dir = self._build_storage_dir(self.processed_dir, data_type)
         filepath = os.path.join(processed_dir, filename)
         if os.path.exists(filepath):
-            return pd.read_csv(filepath, index_col=0, encoding="utf-8-sig")
+            return pd.read_csv(filepath, index_col=0)
         return None

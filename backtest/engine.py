@@ -137,6 +137,34 @@ class BacktestEngine:
 
         return None
 
+    def _get_holding_days(
+        self,
+        df: pd.DataFrame,
+        symbol: str,
+        date: datetime,
+    ) -> Optional[int]:
+        entry_date = self.last_buy_dates.get(symbol)
+        if entry_date is None or entry_date not in df.index or date not in df.index:
+            return None
+
+        entry_loc = df.index.get_loc(entry_date)
+        current_loc = df.index.get_loc(date)
+
+        if isinstance(entry_loc, slice):
+            entry_loc = entry_loc.start
+        elif isinstance(entry_loc, np.ndarray):
+            entry_loc = int(entry_loc[0])
+
+        if isinstance(current_loc, slice):
+            current_loc = current_loc.start
+        elif isinstance(current_loc, np.ndarray):
+            current_loc = int(current_loc[0])
+
+        if not isinstance(entry_loc, int) or not isinstance(current_loc, int):
+            return None
+
+        return max(current_loc - entry_loc, 0)
+
     def _is_suspended(self, row: pd.Series) -> bool:
         for column in ["open", "close", "high", "low"]:
             if column not in row or pd.isna(row[column]):
