@@ -13,10 +13,27 @@ data:
 backtest:
   start_date: "2020-01-01"
   end_date: "2024-12-31"
-  initial_capital: 500000
+  initial_capital: 100000
   trade_amount: 10000
   commission_rate: 0.0003
   slippage: 0.0001
+  min_commission: 5.0
+  stamp_duty_rate: 0.0005
+  trade_constraints:
+    enforce_lot_size: true
+    lot_size: 100
+    enable_t1: true
+    block_suspended: true
+    block_limit_up: true
+    block_limit_down: true
+    limit_pct: 0.10
+    st_limit_pct: 0.05
+    limit_pct_by_prefix:
+      "300": 0.20
+      "301": 0.20
+      "688": 0.20
+      "4": 0.30
+      "8": 0.30
   
   
 strategy:

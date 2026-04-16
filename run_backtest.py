@@ -281,6 +281,7 @@ def run_backtest(
         initial_capital=initial_capital,
         commission_rate=config["backtest"]["commission_rate"],
         slippage=config["backtest"]["slippage"],
+        config_path=config_path,
     )
 
     engine.set_stop_strategies(
@@ -312,9 +313,13 @@ def run_backtest(
         logger.info("No trade records generated")
         return results
 
-    total_trades = len(trades[trades["action"] == "buy"])
-    total_trades_done = len(trades[trades["action"] == "sell"])
-    win_trades = len(trades[trades["profit"] > 0]) if "profit" in trades.columns else 0
+    filled_trades = trades
+    if "status" in trades.columns:
+        filled_trades = trades[trades["status"] == "filled"].copy()
+
+    total_trades = len(filled_trades[filled_trades["action"] == "buy"])
+    total_trades_done = len(filled_trades[filled_trades["action"] == "sell"])
+    win_trades = len(filled_trades[filled_trades["profit"] > 0]) if "profit" in filled_trades.columns else 0
     win_rate = (win_trades / total_trades_done * 100) if total_trades_done > 0 else 0
 
     logger.info("\n" + "=" * 60)
@@ -334,18 +339,26 @@ def run_backtest(
     logger.info(f"Win rate: {win_rate:.2f}%")
     logger.info(f"Max concurrent positions: {max_position}")
     logger.info(f"Current positions: {len(results['positions'].iloc[-1].keys())}")
+    if "status" in trades.columns:
+        rejected_buy_count = len(
+            trades[(trades["status"] == "rejected") & (trades["action"] == "buy")]
+        )
+        logger.info(f"Rejected buys (constraint): {rejected_buy_count}")
 
-    if total_trades > 0 and "profit" in trades.columns:
-        avg_profit = trades["profit"].mean()
-        avg_profit_pct = trades["profit_pct"].mean()
+    if total_trades > 0 and "profit" in filled_trades.columns:
+        avg_profit = filled_trades["profit"].mean()
+        avg_profit_pct = filled_trades["profit_pct"].mean()
         logger.info(f"Average profit: {avg_profit:,.2f}")
         logger.info(f"Average profit pct: {avg_profit_pct:.2f}%")
 
-        if "reason" in trades.columns:
-            stop_loss_count = len(trades[trades["reason"] == "stop_loss"])
-            stop_profit_count = len(trades[trades["reason"] == "stop_profit"])
+        if "reason" in filled_trades.columns:
+            stop_loss_count = len(filled_trades[filled_trades["reason"] == "stop_loss"])
+            stop_profit_count = len(filled_trades[filled_trades["reason"] == "stop_profit"])
             strategy_count = len(
-                trades[(trades["action"] == "sell") & (trades["reason"] == "strategy")]
+                filled_trades[
+                    (filled_trades["action"] == "sell")
+                    & (filled_trades["reason"] == "strategy")
+                ]
             )
             logger.info(f"Stop-loss exits: {stop_loss_count}")
             logger.info(f"Stop-profit exits: {stop_profit_count}")

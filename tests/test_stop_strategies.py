@@ -68,7 +68,7 @@ def test_engine_applies_atr_stop_profit():
     def strategy_func(date, data, positions):
         if not state["bought"]:
             state["bought"] = True
-            return {"AAA": {"action": "buy", "shares": 1}}
+            return {"AAA": {"action": "buy", "shares": 100}}
         return {}
 
     engine.run(data, strategy_func, show_progress=False)
@@ -100,7 +100,7 @@ def test_engine_applies_atr_stop_loss():
     def strategy_func(date, data, positions):
         if not state["bought"]:
             state["bought"] = True
-            return {"AAA": {"action": "buy", "shares": 1}}
+            return {"AAA": {"action": "buy", "shares": 100}}
         return {}
 
     engine.run(data, strategy_func, show_progress=False)
@@ -126,7 +126,7 @@ def test_engine_applies_holding_day_stop_loss():
     def strategy_func(date, data, positions):
         if not state["bought"]:
             state["bought"] = True
-            return {"AAA": {"action": "buy", "shares": 1}}
+            return {"AAA": {"action": "buy", "shares": 100}}
         return {}
 
     engine.run(data, strategy_func, show_progress=False)
@@ -152,7 +152,7 @@ def test_engine_applies_holding_day_stop_profit():
     def strategy_func(date, data, positions):
         if not state["bought"]:
             state["bought"] = True
-            return {"AAA": {"action": "buy", "shares": 1}}
+            return {"AAA": {"action": "buy", "shares": 100}}
         return {}
 
     engine.run(data, strategy_func, show_progress=False)
