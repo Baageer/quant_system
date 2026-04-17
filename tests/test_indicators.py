@@ -12,7 +12,7 @@ from signals.indicators import (
     obv, adx, mfi, roc, momentum,
     vwap, donchian_channel, keltner_channel,
     trix, dmi, typical_price, pivot_points,
-    z_score, volatility, supertrend
+    z_score, rsrs_beta_r2, rsrs_zscore, rsrs, volatility, supertrend
 )
 
 
@@ -531,6 +531,72 @@ class TestZScore:
         
         assert pd.isna(result.iloc[18])
         assert not pd.isna(result.iloc[19])
+
+
+class TestRSRS:
+
+    def test_rsrs_beta_r2_output_shape(self, price_data):
+        beta, r2 = rsrs_beta_r2(price_data["high"], price_data["low"], window=18)
+        assert len(beta) == len(price_data)
+        assert len(r2) == len(price_data)
+
+    def test_rsrs_beta_close_to_linear_slope(self):
+        n = 80
+        idx = pd.date_range("2024-01-01", periods=n, freq="D")
+        low = pd.Series(np.linspace(10, 20, n), index=idx)
+        high = low * 1.2 + 0.5
+
+        beta, r2 = rsrs_beta_r2(high, low, window=18)
+        valid_beta = beta.dropna()
+        valid_r2 = r2.dropna()
+
+        assert not valid_beta.empty
+        assert np.isclose(valid_beta.iloc[-1], 1.2, atol=1e-6)
+        assert np.isclose(valid_r2.iloc[-1], 1.0, atol=1e-8)
+
+    def test_rsrs_zscore_output_shape(self, price_data):
+        beta, _ = rsrs_beta_r2(price_data["high"], price_data["low"], window=18)
+        z = rsrs_zscore(beta, window=60)
+        assert len(z) == len(price_data)
+
+    def test_rsrs_score_output_shape(self, price_data):
+        beta, r2, zscore, score = rsrs(
+            high=price_data["high"],
+            low=price_data["low"],
+            window=18,
+            zscore_window=60,
+            use_r2_weight=True,
+            use_beta_adjustment=False,
+        )
+        assert len(beta) == len(price_data)
+        assert len(r2) == len(price_data)
+        assert len(zscore) == len(price_data)
+        assert len(score) == len(price_data)
+
+    def test_rsrs_weight_flags_make_difference(self, price_data):
+        _, _, _, score_base = rsrs(
+            high=price_data["high"],
+            low=price_data["low"],
+            window=18,
+            zscore_window=60,
+            use_r2_weight=False,
+            use_beta_adjustment=False,
+        )
+        _, _, _, score_weighted = rsrs(
+            high=price_data["high"],
+            low=price_data["low"],
+            window=18,
+            zscore_window=60,
+            use_r2_weight=True,
+            use_beta_adjustment=False,
+        )
+
+        valid_mask = (score_base == score_base) & (score_weighted == score_weighted)
+        assert valid_mask.any()
+        assert not np.allclose(
+            score_base[valid_mask].values,
+            score_weighted[valid_mask].values,
+        )
 
 
 class TestVolatility:

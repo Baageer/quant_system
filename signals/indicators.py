@@ -4,7 +4,7 @@
 """
 import pandas as pd
 import numpy as np
-from typing import Tuple, Union
+from typing import Optional, Tuple, Union
 
 
 def sma(data: pd.Series, window: int) -> pd.Series:
@@ -588,6 +588,121 @@ def z_score(data: pd.Series, window: int = 20) -> pd.Series:
     std = data.rolling(window=window, min_periods=window).std()
     
     return (data - mean) / std
+
+
+def rsrs_beta_r2(
+    high: pd.Series,
+    low: pd.Series,
+    window: int = 18,
+    min_valid_window: Optional[int] = None,
+) -> Tuple[pd.Series, pd.Series]:
+    """
+    RSRS基础指标: 计算滚动回归斜率(beta)与拟合优度(R^2).
+
+    对每个滚动窗口, 用 low 解释 high:
+        high = alpha + beta * low + error
+    """
+    if window < 2:
+        raise ValueError("window must be at least 2")
+
+    if not high.index.equals(low.index):
+        low = low.reindex(high.index)
+
+    valid_window = window if min_valid_window is None else int(min_valid_window)
+    valid_window = max(2, min(valid_window, window))
+
+    beta = pd.Series(np.nan, index=high.index, dtype=float)
+    r2 = pd.Series(np.nan, index=high.index, dtype=float)
+
+    for i in range(window - 1, len(high)):
+        x = np.asarray(low.iloc[i - window + 1 : i + 1].values, dtype=float)
+        y = np.asarray(high.iloc[i - window + 1 : i + 1].values, dtype=float)
+
+        valid = np.isfinite(x) & np.isfinite(y)
+        if int(valid.sum()) < valid_window:
+            continue
+
+        x = x[valid]
+        y = y[valid]
+        x_mean = float(x.mean())
+        y_mean = float(y.mean())
+
+        x_diff = x - x_mean
+        x_var = float(np.mean(x_diff * x_diff))
+        if x_var <= 0:
+            continue
+
+        y_diff = y - y_mean
+        cov_xy = float(np.mean(x_diff * y_diff))
+        slope = cov_xy / x_var
+        intercept = y_mean - slope * x_mean
+
+        y_hat = intercept + slope * x
+        ss_res = float(np.sum((y - y_hat) ** 2))
+        ss_tot = float(np.sum((y - y_mean) ** 2))
+
+        beta.iloc[i] = slope
+        if ss_tot > 0:
+            r2.iloc[i] = max(0.0, 1.0 - ss_res / ss_tot)
+
+    return beta, r2
+
+
+def rsrs_zscore(
+    beta: pd.Series,
+    window: int = 120,
+    min_periods: Optional[int] = None,
+) -> pd.Series:
+    """
+    RSRS斜率序列标准化(z-score).
+    """
+    if window < 2:
+        raise ValueError("window must be at least 2")
+
+    if min_periods is None:
+        min_periods = max(20, window // 3)
+    min_periods = max(2, min(int(min_periods), int(window)))
+
+    rolling_mean = beta.rolling(window=window, min_periods=min_periods).mean()
+    rolling_std = beta.rolling(window=window, min_periods=min_periods).std().replace(0, np.nan)
+    return (beta - rolling_mean) / rolling_std
+
+
+def rsrs(
+    high: pd.Series,
+    low: pd.Series,
+    window: int = 18,
+    zscore_window: int = 120,
+    min_valid_window: Optional[int] = None,
+    use_r2_weight: bool = True,
+    use_beta_adjustment: bool = False,
+    zscore_min_periods: Optional[int] = None,
+) -> Tuple[pd.Series, pd.Series, pd.Series, pd.Series]:
+    """
+    RSRS完整指标.
+
+    返回:
+        beta: 回归斜率
+        r2: 回归R^2
+        zscore: beta的滚动标准分
+        score: 可直接用于策略阈值判断的RSRS评分
+    """
+    beta, r2 = rsrs_beta_r2(
+        high=high,
+        low=low,
+        window=window,
+        min_valid_window=min_valid_window,
+    )
+
+    zscore = rsrs_zscore(beta, window=zscore_window, min_periods=zscore_min_periods)
+    score = zscore.copy()
+
+    if use_r2_weight:
+        score = score * r2
+    if use_beta_adjustment:
+        score = score * beta
+
+    return beta, r2, zscore, score
 
 
 def volatility(

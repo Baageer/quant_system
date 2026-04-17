@@ -55,9 +55,13 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from data.data_api import DataAPI
-from signals.indicators import bollinger_bands, sma, supertrend
+from research.param_search.conditions.registry import (
+    BASE_CONDITION_PARAMS_MAP,
+    CONDITION_PARAM_GRID_MAP,
+    build_condition_frame,
+)
 
-CONDITION_NAME = "bollinger_squeeze"
+CONDITION_NAME = "rsrs_breakout"  # bollinger_squeeze | rsrs_breakout
 START_DATE = "2020-01-01"
 END_DATE = "2024-12-31"
 
@@ -83,50 +87,15 @@ TOP_N_EXPERIMENTS = 15
 MIN_EVENTS_PER_EXPERIMENT = 8
 MAX_EXPERIMENTS = None
 USE_MULTIPROCESSING = True
-MAX_WORKERS = 8
+MAX_WORKERS = 12
 PROCESS_POOL_CHUNK_SIZE = 1
 
-BASE_CONDITION_PARAMS = {
-    "window": 30,
-    "num_std": 2.0,
-    "squeeze_threshold": None,
-    "squeeze_quantile": 0.1,
-    "squeeze_lookback": 60,
-    "require_breakout_confirmation": True,
-    "breakout_direction": "up",  # up | down | both
-    "breakout_buffer": 0.0,
-    "breakout_max_wait": 10,
-    "breakout_confirm_bars": 1,
-    "use_volume_filter": True,
-    "volume_window": 60,
-    "volume_multiplier": 2,
-    "use_trend_filter": True,
-    "trend_window": 60,
-    "trend_slope_window": 5,
-    "use_supertrend_filter": False,
-    "supertrend_atr_period": 10,
-    "supertrend_multiplier": 3.0,
-    "use_band_expansion_filter": False,
-    "band_expansion_lookback": 1,
-    "use_return_filter": False,
-    "min_breakout_return": 0.0,
-}
+if CONDITION_NAME not in BASE_CONDITION_PARAMS_MAP:
+    supported = ", ".join(sorted(BASE_CONDITION_PARAMS_MAP.keys()))
+    raise ValueError(f"Unsupported CONDITION_NAME: {CONDITION_NAME}. Available: {supported}")
 
-CONDITION_PARAM_GRID = {
-    # "window": [20, 30],
-    # "num_std": [1.8, 2.0, 2.2],
-    # "squeeze_quantile": [0.05, 0.1, 0.15],
-    # "squeeze_lookback": [40, 60],
-    # "breakout_max_wait": [5, 10],
-    # "breakout_confirm_bars": [1, 2],
-    # "volume_multiplier": [1.2, 1.5, 2.0],
-    # "volume_window": [20, 30, 60],
-    # "trend_window": [20, 30, 60],
-    # "trend_slope_window": [3,5],
-    "supertrend_atr_period": [5, 10, 15],
-    "supertrend_multiplier": [1.5, 3.0, 4.5],
-
-}
+BASE_CONDITION_PARAMS = dict(BASE_CONDITION_PARAMS_MAP[CONDITION_NAME])
+CONDITION_PARAM_GRID = dict(CONDITION_PARAM_GRID_MAP.get(CONDITION_NAME, {}))
 
 
 def count_parameter_combinations(param_grid):
@@ -208,190 +177,6 @@ def standardize_price_frame(raw_df):
     return df
 
 
-def build_bollinger_squeeze_condition(df, params):
-    prices = df["close"]
-    window = int(params.get("window", 20))
-    num_std = float(params.get("num_std", 2.0))
-    upper_band, middle_band, lower_band = bollinger_bands(prices, window=window, num_std=num_std)
-    bandwidth = (upper_band - lower_band) / middle_band.replace(0, np.nan)
-
-    squeeze_threshold = params.get("squeeze_threshold")
-    if squeeze_threshold is None:
-        threshold = bandwidth.rolling(
-            window=int(params.get("squeeze_lookback", 60)),
-            min_periods=max(window, 5),
-        ).quantile(float(params.get("squeeze_quantile", 0.1)))
-    else:
-        threshold = pd.Series(float(squeeze_threshold), index=df.index, dtype=float)
-
-    squeeze_condition = (bandwidth <= threshold).fillna(False)
-    require_breakout_confirmation = params.get("require_breakout_confirmation", False)
-    breakout_direction = params.get("breakout_direction", "both")
-    if breakout_direction not in {"up", "down", "both"}:
-        raise ValueError("breakout_direction must be one of: up, down, both")
-
-    breakout_buffer = float(params.get("breakout_buffer", 0.0))
-    breakout_max_wait = max(int(params.get("breakout_max_wait", 10)), 1)
-    breakout_confirm_bars = max(int(params.get("breakout_confirm_bars", 1)), 1)
-
-    volume_confirmation = pd.Series(True, index=df.index, dtype=bool)
-    if params.get("use_volume_filter", False):
-        if "volume" not in df.columns:
-            raise ValueError("volume column is required when use_volume_filter=True")
-        volume_window = int(params.get("volume_window", 20))
-        volume_multiplier = float(params.get("volume_multiplier", 1.5))
-        volume_ma = sma(df["volume"], volume_window)
-        volume_confirmation = ((df["volume"] >= volume_ma * volume_multiplier) & (df["volume"] > df["volume"].shift(1))).fillna(False)
-
-    trend_long_confirmation = pd.Series(True, index=df.index, dtype=bool)
-    trend_short_confirmation = pd.Series(True, index=df.index, dtype=bool)
-    if params.get("use_trend_filter", False):
-        trend_window = int(params.get("trend_window", 60))
-        trend_slope_window = int(params.get("trend_slope_window", 3))
-        trend_ma = sma(prices, trend_window)
-        trend_long_confirmation = ((prices > trend_ma) & (trend_ma > trend_ma.shift(trend_slope_window))).fillna(False)
-        trend_short_confirmation = ((prices < trend_ma) & (trend_ma < trend_ma.shift(trend_slope_window))).fillna(False)
-
-    supertrend_long_confirmation = pd.Series(True, index=df.index, dtype=bool)
-    supertrend_short_confirmation = pd.Series(True, index=df.index, dtype=bool)
-    if params.get("use_supertrend_filter", False):
-        required_columns = {"high", "low", "close"}
-        if not required_columns.issubset(df.columns):
-            raise ValueError("high, low, close columns are required when use_supertrend_filter=True")
-        _, trend_direction = supertrend(
-            df["high"],
-            df["low"],
-            prices,
-            atr_period=int(params.get("supertrend_atr_period", 10)),
-            multiplier=float(params.get("supertrend_multiplier", 3.0)),
-        )
-        supertrend_long_confirmation = (trend_direction > 0).fillna(False)
-        supertrend_short_confirmation = (trend_direction < 0).fillna(False)
-
-    band_expansion_confirmation = pd.Series(True, index=df.index, dtype=bool)
-    if params.get("use_band_expansion_filter", False):
-        band_expansion_lookback = max(int(params.get("band_expansion_lookback", 1)), 1)
-        band_expansion_confirmation = (bandwidth > bandwidth.shift(band_expansion_lookback)).fillna(False)
-
-    return_up_confirmation = pd.Series(True, index=df.index, dtype=bool)
-    return_down_confirmation = pd.Series(True, index=df.index, dtype=bool)
-    if params.get("use_return_filter", False):
-        min_breakout_return = float(params.get("min_breakout_return", 0.0))
-        daily_return = prices.pct_change()
-        return_up_confirmation = (daily_return >= min_breakout_return).fillna(False)
-        return_down_confirmation = (daily_return <= -min_breakout_return).fillna(False)
-
-    breakout_up = pd.Series(False, index=df.index, dtype=bool)
-    breakout_down = pd.Series(False, index=df.index, dtype=bool)
-    breakout_valid = pd.Series(False, index=df.index, dtype=bool)
-    event_direction = pd.Series(index=df.index, dtype=object)
-    condition = squeeze_condition.copy() if not require_breakout_confirmation else pd.Series(False, index=df.index, dtype=bool)
-
-    if require_breakout_confirmation:
-        in_squeeze = False
-        bars_since_squeeze = 0
-        up_streak = 0
-        down_streak = 0
-
-        for i in range(len(df)):
-            if any(
-                is_missing(series.iloc[i])
-                for series in (bandwidth, threshold, upper_band, lower_band)
-            ):
-                continue
-
-            if squeeze_condition.iloc[i]:
-                in_squeeze = True
-                bars_since_squeeze = 0
-                up_streak = 0
-                down_streak = 0
-                continue
-
-            if not in_squeeze:
-                continue
-
-            bars_since_squeeze += 1
-            if bars_since_squeeze > breakout_max_wait:
-                in_squeeze = False
-                up_streak = 0
-                down_streak = 0
-                continue
-
-            close_above_upper = prices.iloc[i] > upper_band.iloc[i] * (1 + breakout_buffer)
-            close_below_lower = prices.iloc[i] < lower_band.iloc[i] * (1 - breakout_buffer)
-            up_streak = up_streak + 1 if close_above_upper else 0
-            down_streak = down_streak + 1 if close_below_lower else 0
-
-            breakout_up.iloc[i] = up_streak >= breakout_confirm_bars
-            breakout_down.iloc[i] = down_streak >= breakout_confirm_bars
-
-            long_filters_ok = (
-                volume_confirmation.iloc[i]
-                and trend_long_confirmation.iloc[i]
-                and supertrend_long_confirmation.iloc[i]
-                and band_expansion_confirmation.iloc[i]
-                and return_up_confirmation.iloc[i]
-            )
-            short_filters_ok = (
-                volume_confirmation.iloc[i]
-                and trend_short_confirmation.iloc[i]
-                and supertrend_short_confirmation.iloc[i]
-                and band_expansion_confirmation.iloc[i]
-                and return_down_confirmation.iloc[i]
-            )
-
-            if breakout_direction in {"up", "both"} and breakout_up.iloc[i] and long_filters_ok:
-                breakout_valid.iloc[i] = True
-                event_direction.iloc[i] = "up"
-                condition.iloc[i] = True
-                in_squeeze = False
-                up_streak = 0
-                down_streak = 0
-            elif breakout_direction in {"down", "both"} and breakout_down.iloc[i] and short_filters_ok:
-                breakout_valid.iloc[i] = True
-                event_direction.iloc[i] = "down"
-                condition.iloc[i] = True
-                in_squeeze = False
-                up_streak = 0
-                down_streak = 0
-
-    return pd.DataFrame(
-        {
-            "upper_band": upper_band,
-            "middle_band": middle_band,
-            "lower_band": lower_band,
-            "bandwidth": bandwidth,
-            "condition_threshold": threshold,
-            "squeeze_condition": squeeze_condition,
-            "breakout_up": breakout_up,
-            "breakout_down": breakout_down,
-            "breakout_valid": breakout_valid,
-            "event_direction": event_direction,
-            "volume_confirmation": volume_confirmation,
-            "trend_long_confirmation": trend_long_confirmation,
-            "trend_short_confirmation": trend_short_confirmation,
-            "supertrend_long_confirmation": supertrend_long_confirmation,
-            "supertrend_short_confirmation": supertrend_short_confirmation,
-            "band_expansion_confirmation": band_expansion_confirmation,
-            "return_up_confirmation": return_up_confirmation,
-            "return_down_confirmation": return_down_confirmation,
-            "condition": condition,
-        },
-        index=df.index,
-    )
-
-
-CONDITION_BUILDERS = {
-    "bollinger_squeeze": build_bollinger_squeeze_condition,
-}
-
-
-def build_condition_frame(df, condition_name, params):
-    if condition_name not in CONDITION_BUILDERS:
-        raise ValueError(f"Unsupported condition: {condition_name}")
-    return CONDITION_BUILDERS[condition_name](df, params)
-
-
 def extract_event_dates(condition, min_gap_between_events=0, event_selection="first_in_run"):
     condition = condition.fillna(False).astype(bool)
 
@@ -455,7 +240,7 @@ def build_price_cache(symbols, data_api, start_date, end_date, min_data_length):
             raw_df = data_api.get_price_history_data(symbol, start_date, end_date)
             price_df = standardize_price_frame(raw_df)
 
-            required_columns = {"close", "high", "low", "volume"}
+            required_columns = {"close", "high", "low"}
             if price_df.empty:
                 cache_skip_rows.append({"symbol": symbol, "reason": "empty_price_data"})
                 continue
@@ -497,6 +282,65 @@ def iter_param_sets(base_params, param_grid, max_experiments=None):
             break
 
 
+EVENT_META_NUMERIC_COLUMNS = [
+    "bandwidth",
+    "condition_threshold",
+    "rsrs_beta",
+    "rsrs_r2",
+    "rsrs_zscore",
+    "rsrs_score",
+]
+EVENT_META_BOOLEAN_COLUMNS = [
+    "breakout_valid",
+    "volume_confirmation",
+    "trend_long_confirmation",
+    "trend_short_confirmation",
+    "supertrend_long_confirmation",
+    "supertrend_short_confirmation",
+    "band_expansion_confirmation",
+    "return_up_confirmation",
+    "return_down_confirmation",
+]
+EVENT_META_TEXT_COLUMNS = ["event_direction"]
+
+
+def _get_event_value(analysis_df, event_date, column):
+    if column not in analysis_df.columns:
+        return None
+    value = analysis_df.loc[event_date, column]
+    if isinstance(value, pd.Series):
+        return value.iloc[-1]
+    return value
+
+
+def build_event_meta_row(analysis_df, symbol, event_date):
+    row = {
+        "symbol": symbol,
+        "event_date": pd.Timestamp(event_date),
+        "event_close": float(analysis_df.loc[event_date, "close"]),
+    }
+
+    for column in EVENT_META_NUMERIC_COLUMNS:
+        value = _get_event_value(analysis_df, event_date, column)
+        if value is None or is_missing(value):
+            continue
+        row[column] = float(value)
+
+    for column in EVENT_META_BOOLEAN_COLUMNS:
+        value = _get_event_value(analysis_df, event_date, column)
+        if value is None or is_missing(value):
+            continue
+        row[column] = bool(value)
+
+    for column in EVENT_META_TEXT_COLUMNS:
+        value = _get_event_value(analysis_df, event_date, column)
+        if value is None or is_missing(value):
+            continue
+        row[column] = str(value)
+
+    return row
+
+
 def run_single_event_study(price_cache, condition_name, condition_params):
     event_windows = []
     event_rows = []
@@ -532,21 +376,7 @@ def run_single_event_study(price_cache, condition_name, condition_params):
                     continue
 
                 event_windows.append(window_df)
-                event_rows.append(
-                    {
-                        "symbol": symbol,
-                        "event_date": pd.Timestamp(event_date),
-                        "event_close": float(analysis_df.loc[event_date, "close"]),
-                        "bandwidth": float(analysis_df.loc[event_date, "bandwidth"]),
-                        "condition_threshold": float(analysis_df.loc[event_date, "condition_threshold"]),
-                        "event_direction": analysis_df.loc[event_date, "event_direction"] if "event_direction" in analysis_df.columns else None,
-                        "breakout_valid": bool(analysis_df.loc[event_date, "breakout_valid"]) if "breakout_valid" in analysis_df.columns else None,
-                        "volume_confirmation": bool(analysis_df.loc[event_date, "volume_confirmation"]) if "volume_confirmation" in analysis_df.columns else None,
-                        "trend_long_confirmation": bool(analysis_df.loc[event_date, "trend_long_confirmation"]) if "trend_long_confirmation" in analysis_df.columns else None,
-                        "trend_short_confirmation": bool(analysis_df.loc[event_date, "trend_short_confirmation"]) if "trend_short_confirmation" in analysis_df.columns else None,
-                        "band_expansion_confirmation": bool(analysis_df.loc[event_date, "band_expansion_confirmation"]) if "band_expansion_confirmation" in analysis_df.columns else None,
-                    }
-                )
+                event_rows.append(build_event_meta_row(analysis_df, symbol, event_date))
         except Exception as exc:
             skip_rows.append({"symbol": symbol, "reason": type(exc).__name__, "detail": str(exc)})
 

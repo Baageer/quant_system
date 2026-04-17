@@ -1,6 +1,6 @@
 timing_strategies:
   ma_cross:
-    name: "双均线交叉策略"
+    name: "MA Cross Strategy"
     module: "signals.timing.ma_cross"
     class: "MACrossStrategy"
     params:
@@ -15,10 +15,10 @@ timing_strategies:
       volume_window: 20
       volume_multiplier: 1.5
     min_data_length: 30
-    description: "短期均线上穿长期均线做多，下穿做空"
-  
+    description: "Go long on short MA crossing above long MA, short/exit on cross down."
+
   rsi:
-    name: "RSI策略"
+    name: "RSI Strategy"
     module: "signals.timing.rsi"
     class: "RSIStrategy"
     params:
@@ -33,10 +33,10 @@ timing_strategies:
       volume_window: 20
       volume_multiplier: 1.2
     min_data_length: 20
-    description: "RSI超卖做多，超买卖出"
-  
+    description: "RSI oversold long, overbought short/exit."
+
   rsi_cross:
-    name: "RSI穿越策略"
+    name: "RSI Cross Strategy"
     module: "signals.timing.rsi"
     class: "RSIStrategy"
     params:
@@ -51,10 +51,10 @@ timing_strategies:
       volume_window: 20
       volume_multiplier: 1.2
     min_data_length: 20
-    description: "RSI穿越超卖超买线产生信号"
-  
+    description: "RSI crossing out of extreme zones generates entries."
+
   macd:
-    name: "MACD策略"
+    name: "MACD Strategy"
     module: "signals.timing.macd"
     class: "MACDStrategy"
     params:
@@ -69,10 +69,10 @@ timing_strategies:
       volume_window: 20
       volume_multiplier: 1.2
     min_data_length: 35
-    description: "MACD金叉做多，死叉做空"
-  
+    description: "MACD cross strategy."
+
   macd_histogram:
-    name: "MACD柱状图策略"
+    name: "MACD Histogram Strategy"
     module: "signals.timing.macd"
     class: "MACDStrategy"
     params:
@@ -87,10 +87,10 @@ timing_strategies:
       volume_window: 20
       volume_multiplier: 1.2
     min_data_length: 35
-    description: "MACD柱状图由负转正做多，由正转负做空"
-  
+    description: "Histogram sign-change based momentum strategy."
+
   bollinger_breakout:
-    name: "布林带突破策略"
+    name: "Bollinger Breakout"
     module: "signals.timing.bollinger_bands"
     class: "BollingerBandsStrategy"
     params:
@@ -103,10 +103,10 @@ timing_strategies:
       volume_window: 20
       volume_multiplier: 1.2
     min_data_length: 25
-    description: "价格突破轨道并结合趋势与放量确认方向"
-  
+    description: "Breakout outside Bollinger bands with optional filters."
+
   bollinger_mean_reversion:
-    name: "布林带均值回归策略"
+    name: "Bollinger Mean Reversion"
     module: "signals.timing.bollinger_bands"
     class: "BollingerBandsStrategy"
     params:
@@ -114,17 +114,17 @@ timing_strategies:
       num_std: 2.0
       mode: "mean_reversion"
     min_data_length: 25
-    description: "价格触及上轨回落后做空，触及下轨反弹后做多"
-  
+    description: "Mean-reversion around Bollinger bands."
+
   bollinger_squeeze:
-    name: "布林带收窄突破策略"
+    name: "Bollinger Squeeze Breakout"
     module: "signals.timing.bollinger_bands"
     class: "BollingerBandsStrategy"
     params:
       window: 30
       num_std: 2.0
       mode: "squeeze"
-      squeeze_threshold: None
+      squeeze_threshold: null
       squeeze_quantile: 0.1
       squeeze_lookback: 60
       use_trend_filter: false
@@ -133,10 +133,10 @@ timing_strategies:
       volume_window: 60
       volume_multiplier: 2
     min_data_length: 25
-    description: "布林带收窄后结合趋势与放量确认突破方向"
-  
+    description: "Squeeze then breakout with optional confirmation filters."
+
   bollinger_double:
-    name: "布林带双确认突破策略"
+    name: "Bollinger Double Confirmation"
     module: "signals.timing.bollinger_bands"
     class: "BollingerBandsStrategy"
     params:
@@ -150,10 +150,35 @@ timing_strategies:
       volume_window: 20
       volume_multiplier: 1.2
     min_data_length: 25
-    description: "价格连续确认突破后，再结合趋势与放量入场"
+    description: "Require multiple bars outside bands before entry."
+
+  rsrs:
+    name: "RSRS Breakout Strategy"
+    module: "signals.timing.rsrs"
+    class: "RSRSStrategy"
+    params:
+      window: 20
+      zscore_window: 90
+      min_valid_window: 12
+      entry_zscore: 1.0
+      exit_zscore: 0.0
+      breakout_direction: "up"
+      use_r2_weight: true
+      use_beta_adjustment: false
+      signal_delay: 0
+      high_col: "high"
+      low_col: "low"
+      use_trend_filter: true
+      trend_window: 20
+      trend_slope_window: 3
+      use_volume_filter: true
+      volume_window: 20
+      volume_multiplier: 2.0
+    min_data_length: 140
+    description: "RSRS score breaks threshold to establish timing position."
 
   volume_breakout:
-    name: "成交量突破策略"
+    name: "Volume Breakout"
     module: "signals.timing.volume"
     class: "VolumeBreakoutStrategy"
     params:
@@ -163,10 +188,10 @@ timing_strategies:
       price_col: "close"
       volume_col: "volume"
     min_data_length: 50
-    description: "成交量显著放大且价格位于趋势线上方做多，下方做空"
+    description: "Volume expansion with trend confirmation."
 
   obv:
-    name: "OBV指标策略"
+    name: "OBV Strategy"
     module: "signals.timing.volume"
     class: "OBVStrategy"
     params:
@@ -174,10 +199,10 @@ timing_strategies:
       price_col: "close"
       volume_col: "volume"
     min_data_length: 20
-    description: "OBV斜率配合价格趋势判断多空方向"
+    description: "OBV slope with price trend confirmation."
 
   mfi:
-    name: "MFI资金流量策略"
+    name: "MFI Strategy"
     module: "signals.timing.volume"
     class: "MFIStrategy"
     params:
@@ -190,10 +215,10 @@ timing_strategies:
       close_col: "close"
       volume_col: "volume"
     min_data_length: 50
-    description: "MFI穿越超买超卖阈值并结合趋势确认交易方向"
+    description: "MFI crossing with trend confirmation."
 
   volume_price_divergence:
-    name: "量价背离策略"
+    name: "Volume-Price Divergence"
     module: "signals.timing.volume"
     class: "VolumePriceDivergenceStrategy"
     params:
@@ -201,11 +226,11 @@ timing_strategies:
       price_col: "close"
       volume_col: "volume"
     min_data_length: 20
-    description: "价格创新高但量能未同步，或价格创新低但量能逆势放大时产生信号"
+    description: "Volume-price divergence signal."
 
 stop_strategies:
   stop_loss:
-    name: "止损策略"
+    name: "Stop Loss Strategy"
     module: "signals.stop.stop_loss"
     class: "StopLossStrategy"
     params:
@@ -215,10 +240,10 @@ stop_strategies:
       atr_window: 14
       atr_multiplier: 1
     min_data_length: 20
-    description: "价格跌破止损价格时触发止损"
-  
+    description: "Trigger stop loss based on configured method."
+
   stop_profit:
-    name: "止盈策略"
+    name: "Stop Profit Strategy"
     module: "signals.stop.stop_profit"
     class: "StopProfitStrategy"
     params:
@@ -228,7 +253,7 @@ stop_strategies:
       atr_window: 14
       atr_multiplier: 2
     min_data_length: 20
-    description: "价格超过止盈价格时触发止盈"
+    description: "Trigger stop profit based on configured method."
 
 # backtest:
 #   default_strategy: "ma_cross"

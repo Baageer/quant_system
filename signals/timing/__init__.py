@@ -38,6 +38,10 @@ from .volume import (
     MFIStrategy,
     VolumePriceDivergenceStrategy
 )
+from .rsrs import (
+    rsrs_breakout_signal,
+    RSRSStrategy,
+)
 
 __all__ = [
     'ma_cross_signal',
@@ -67,4 +71,6 @@ __all__ = [
     'OBVStrategy',
     'MFIStrategy',
     'VolumePriceDivergenceStrategy',
+    'rsrs_breakout_signal',
+    'RSRSStrategy',
 ]
