@@ -70,8 +70,8 @@ CONDITION_PARAM_GRID_MAP = {
         # "volume_window": [20, 30, 60],
         # "trend_window": [20, 30, 60],
         # "trend_slope_window": [3,5],
-        "supertrend_atr_period": [5, 10, 15],
-        "supertrend_multiplier": [1.5, 3.0, 4.5],
+        # "supertrend_atr_period": [5, 10, 15],
+        # "supertrend_multiplier": [1.5, 3.0, 4.5],
         
     },
     "rsrs_breakout": {
@@ -80,8 +80,8 @@ CONDITION_PARAM_GRID_MAP = {
         # "entry_zscore": [0.6, 0.8, 1.0],
         # "volume_window": [20, 30, 60],
         # "volume_multiplier": [1.2, 1.5, 2.0],
-        "trend_window": [20, 30, 60],
-        "trend_slope_window": [3, 5],
+        # "trend_window": [20, 30, 60],
+        # "trend_slope_window": [3, 5],
     },
 }
 
