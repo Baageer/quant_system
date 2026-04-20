@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from concurrent.futures import ProcessPoolExecutor
 from itertools import product
 from pathlib import Path
 import json
+import multiprocessing
 import os
 import re
 import sys
@@ -69,6 +71,9 @@ RANK_BY_HORIZON = 20
 TOP_N_EXPERIMENTS = 15
 MIN_EVENTS_PER_EXPERIMENT = 6
 MAX_EXPERIMENTS = None
+USE_MULTIPROCESSING = True
+MAX_WORKERS = 10
+PROCESS_POOL_CHUNK_SIZE = 1
 
 if CONDITION_NAME not in BASE_CONDITION_PARAMS_MAP:
     supported = ", ".join(sorted(BASE_CONDITION_PARAMS_MAP.keys()))
@@ -98,6 +103,13 @@ EVENT_META_BOOLEAN_COLUMNS = [
     "return_down_confirmation",
 ]
 EVENT_META_TEXT_COLUMNS = ["event_direction"]
+
+
+WORKER_PRICE_CACHE = None
+WORKER_SYMBOL_NAME_MAP = None
+WORKER_CONDITION_NAME = None
+WORKER_RANK_BY_HORIZON = None
+WORKER_MIN_EVENTS_PER_EXPERIMENT = None
 
 
 def is_missing(value):
@@ -554,6 +566,146 @@ def summarize_experiment(experiment_id, param_label, params, result, rank_by_hor
     return summary
 
 
+def resolve_worker_count(param_sets):
+    if not param_sets:
+        return 1
+
+    requested_workers = MAX_WORKERS if MAX_WORKERS is not None else (os.cpu_count() or 1)
+    return max(1, min(requested_workers, len(param_sets)))
+
+
+def init_experiment_worker(price_cache, symbol_name_map, condition_name, rank_by_horizon, min_events_per_experiment):
+    global WORKER_PRICE_CACHE
+    global WORKER_SYMBOL_NAME_MAP
+    global WORKER_CONDITION_NAME
+    global WORKER_RANK_BY_HORIZON
+    global WORKER_MIN_EVENTS_PER_EXPERIMENT
+
+    WORKER_PRICE_CACHE = price_cache
+    WORKER_SYMBOL_NAME_MAP = symbol_name_map
+    WORKER_CONDITION_NAME = condition_name
+    WORKER_RANK_BY_HORIZON = rank_by_horizon
+    WORKER_MIN_EVENTS_PER_EXPERIMENT = min_events_per_experiment
+
+
+def run_experiment_scan_task(task):
+    experiment_id, param_label, params = task
+    result = run_single_event_study(
+        price_cache=WORKER_PRICE_CACHE,
+        symbol_name_map=WORKER_SYMBOL_NAME_MAP,
+        condition_name=WORKER_CONDITION_NAME,
+        condition_params=params,
+    )
+    summary_row = summarize_experiment(
+        experiment_id=experiment_id,
+        param_label=param_label,
+        params=params,
+        result=result,
+        rank_by_horizon=WORKER_RANK_BY_HORIZON,
+    )
+
+    qualified_result = None
+    if summary_row["event_count"] >= WORKER_MIN_EVENTS_PER_EXPERIMENT:
+        qualified_result = {
+            "param_label": param_label,
+            "params": params,
+            **result,
+        }
+
+    return {
+        "experiment_id": experiment_id,
+        "param_label": param_label,
+        "params": params,
+        "summary_row": summary_row,
+        "forward_summary": result["forward_summary"],
+        "event_meta": result["event_meta"],
+        "qualified_result": qualified_result,
+    }
+
+
+def collect_experiment_output(output, experiment_results, grid_summary_rows, forward_summary_frames, event_meta_frames):
+    experiment_id = output["experiment_id"]
+    param_label = output["param_label"]
+
+    grid_summary_rows.append(output["summary_row"])
+
+    if not output["forward_summary"].empty:
+        frame = output["forward_summary"].copy()
+        frame["experiment_id"] = experiment_id
+        frame["param_label"] = param_label
+        forward_summary_frames.append(frame)
+
+    if not output["event_meta"].empty:
+        frame = output["event_meta"].copy()
+        frame["experiment_id"] = experiment_id
+        frame["param_label"] = param_label
+        event_meta_frames.append(frame)
+
+    if output["qualified_result"] is not None:
+        experiment_results[experiment_id] = output["qualified_result"]
+
+
+def scan_parameters_serial(param_sets, price_cache, symbol_name_map):
+    for experiment_id, param_label, params in tqdm(param_sets, desc="Exploring params", unit="experiment"):
+        result = run_single_event_study(
+            price_cache=price_cache,
+            symbol_name_map=symbol_name_map,
+            condition_name=CONDITION_NAME,
+            condition_params=params,
+        )
+        summary_row = summarize_experiment(
+            experiment_id=experiment_id,
+            param_label=param_label,
+            params=params,
+            result=result,
+            rank_by_horizon=RANK_BY_HORIZON,
+        )
+
+        qualified_result = None
+        if summary_row["event_count"] >= MIN_EVENTS_PER_EXPERIMENT:
+            qualified_result = {
+                "param_label": param_label,
+                "params": params,
+                **result,
+            }
+
+        yield {
+            "experiment_id": experiment_id,
+            "param_label": param_label,
+            "params": params,
+            "summary_row": summary_row,
+            "forward_summary": result["forward_summary"],
+            "event_meta": result["event_meta"],
+            "qualified_result": qualified_result,
+        }
+
+
+def scan_parameters_parallel(param_sets, price_cache, symbol_name_map):
+    worker_count = resolve_worker_count(param_sets)
+    mp_context = multiprocessing.get_context("spawn")
+    with ProcessPoolExecutor(
+        max_workers=worker_count,
+        mp_context=mp_context,
+        initializer=init_experiment_worker,
+        initargs=(price_cache, symbol_name_map, CONDITION_NAME, RANK_BY_HORIZON, MIN_EVENTS_PER_EXPERIMENT),
+    ) as executor:
+        results = executor.map(
+            run_experiment_scan_task,
+            param_sets,
+            chunksize=PROCESS_POOL_CHUNK_SIZE,
+        )
+        for output in tqdm(results, total=len(param_sets), desc="Exploring params", unit="experiment"):
+            yield output
+
+
+def scan_parameters(param_sets, price_cache, symbol_name_map):
+    should_use_multiprocessing = USE_MULTIPROCESSING and len(param_sets) > 1
+    if should_use_multiprocessing:
+        yield from scan_parameters_parallel(param_sets, price_cache, symbol_name_map)
+        return
+    yield from scan_parameters_serial(param_sets, price_cache, symbol_name_map)
+
+
 def select_best_experiment(grid_summary_df, experiment_results):
     if grid_summary_df.empty:
         raise ValueError("No experiments were completed. Adjust the universe, dates, or parameter grid.")
@@ -643,6 +795,9 @@ def build_runtime_summary(universe_df):
             "min_events_per_experiment": MIN_EVENTS_PER_EXPERIMENT,
             "parameter_combinations": count_parameter_combinations(CONDITION_PARAM_GRID),
             "max_experiments": MAX_EXPERIMENTS,
+            "use_multiprocessing": USE_MULTIPROCESSING,
+            "max_workers": MAX_WORKERS,
+            "process_pool_chunk_size": PROCESS_POOL_CHUNK_SIZE,
         }
     )
 
@@ -685,46 +840,24 @@ def main():
 
     param_sets = list(iter_param_sets(BASE_CONDITION_PARAMS, CONDITION_PARAM_GRID, MAX_EXPERIMENTS))
     print(f"Running {len(param_sets)} experiments...")
+    if USE_MULTIPROCESSING and len(param_sets) > 1:
+        print(f"Using multiprocessing with {resolve_worker_count(param_sets)} workers.")
+    else:
+        print("Using serial parameter scan.")
 
     experiment_results = {}
     grid_summary_rows = []
     forward_summary_frames = []
     event_meta_frames = []
 
-    for experiment_id, param_label, params in tqdm(param_sets, desc="Exploring params", unit="experiment"):
-        result = run_single_event_study(
-            price_cache=price_cache,
-            symbol_name_map=symbol_name_map,
-            condition_name=CONDITION_NAME,
-            condition_params=params,
+    for output in scan_parameters(param_sets, price_cache, symbol_name_map):
+        collect_experiment_output(
+            output,
+            experiment_results=experiment_results,
+            grid_summary_rows=grid_summary_rows,
+            forward_summary_frames=forward_summary_frames,
+            event_meta_frames=event_meta_frames,
         )
-        summary_row = summarize_experiment(
-            experiment_id=experiment_id,
-            param_label=param_label,
-            params=params,
-            result=result,
-            rank_by_horizon=RANK_BY_HORIZON,
-        )
-        grid_summary_rows.append(summary_row)
-
-        if not result["forward_summary"].empty:
-            forward_frame = result["forward_summary"].copy()
-            forward_frame["experiment_id"] = experiment_id
-            forward_frame["param_label"] = param_label
-            forward_summary_frames.append(forward_frame)
-
-        if not result["event_meta"].empty:
-            meta_frame = result["event_meta"].copy()
-            meta_frame["experiment_id"] = experiment_id
-            meta_frame["param_label"] = param_label
-            event_meta_frames.append(meta_frame)
-
-        if summary_row["event_count"] >= MIN_EVENTS_PER_EXPERIMENT:
-            experiment_results[experiment_id] = {
-                "param_label": param_label,
-                "params": params,
-                **result,
-            }
 
     grid_summary_df = pd.DataFrame(grid_summary_rows)
     if not grid_summary_df.empty:
@@ -747,7 +880,7 @@ def main():
     display(pd.Series(best_result["params"], name="value").to_frame())
     display(best_result["forward_summary"])
     display(best_result["event_count_by_symbol"].head(20).to_frame())
-    display(best_result["event_meta"].head(10))
+    # display(best_result["event_meta"].head(10))
 
     if SHOW_RESULTS:
         plot_best_result(best_experiment_id, best_result)
@@ -757,4 +890,5 @@ def main():
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     main()

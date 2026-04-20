@@ -14,10 +14,10 @@ CONDITION_BUILDERS = {
 
 BASE_CONDITION_PARAMS_MAP = {
     "bollinger_squeeze": {
-        "window": 30,
-        "num_std": 2.0,
+        "window": 20,
+        "num_std": 2,
         "squeeze_threshold": None,
-        "squeeze_quantile": 0.1,
+        "squeeze_quantile": 0.05,
         "squeeze_lookback": 60,
         "require_breakout_confirmation": True,
         "breakout_direction": "up",  # up | down | both
@@ -29,7 +29,7 @@ BASE_CONDITION_PARAMS_MAP = {
         "volume_multiplier": 2,
         "use_trend_filter": True,
         "trend_window": 60,
-        "trend_slope_window": 5,
+        "trend_slope_window": 3,
         "use_supertrend_filter": False,
         "supertrend_atr_period": 10,
         "supertrend_multiplier": 3.0,
@@ -61,12 +61,12 @@ BASE_CONDITION_PARAMS_MAP = {
 CONDITION_PARAM_GRID_MAP = {
     "bollinger_squeeze": {
         # "window": [20, 30],
-        # "num_std": [1.8, 2.0, 2.2],
+        "num_std": [2.0, 2.5, 3.0],
         # "squeeze_quantile": [0.05, 0.1, 0.15],
         # "squeeze_lookback": [40, 60],
         # "breakout_max_wait": [5, 10],
         # "breakout_confirm_bars": [1, 2],
-        # "volume_multiplier": [1.2, 1.5, 2.0],
+        # "volume_multiplier": [1.5, 2.0, 2.5],
         # "volume_window": [20, 30, 60],
         # "trend_window": [20, 30, 60],
         # "trend_slope_window": [3,5],
