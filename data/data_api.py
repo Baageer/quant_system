@@ -352,7 +352,7 @@ class DataAPI:
         if data is None or data.empty:
             data = self._fetch_daily_price_data(cache_symbol, d_start_date, d_end_date)
             self.save_to_cache(data, filename, "price_history")
-            time.sleep(3)
+            time.sleep(2)
         else:
             data = self._standardize_daily_price_data(data, cache_symbol)
 
@@ -380,7 +380,7 @@ class DataAPI:
         if data is None or data.empty:
             data = self._fetch_daily_price_data(cache_symbol, d_start_date, d_end_date)
             self.save_to_cache(data, filename, "price")
-            time.sleep(3)
+            time.sleep(2)
         else:
             data = self._standardize_daily_price_data(data, cache_symbol)
 

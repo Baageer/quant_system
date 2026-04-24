@@ -125,9 +125,9 @@ timing_strategies:
       num_std: 2.0
       mode: "squeeze"
       squeeze_threshold: null
-      squeeze_quantile: 0.1
+      squeeze_quantile: 0.05
       squeeze_lookback: 60
-      use_trend_filter: false
+      use_trend_filter: true
       trend_window: 60
       use_volume_filter: true
       volume_window: 60

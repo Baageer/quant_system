@@ -194,7 +194,7 @@ def run_backtest(
 
     stock_list = data_api.get_stock_list()
     if stock_max_number != -1 and len(stock_list) > stock_max_number:
-        stock_list = stock_list[:stock_max_number]
+        stock_list = stock_list[stock_max_number:]
     logger.info(f"Stock count: {len(stock_list)}")
 
     data_iterator = tqdm(stock_list, desc="Data loading", unit="symbol", disable=False)
