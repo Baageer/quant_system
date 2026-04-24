@@ -200,6 +200,23 @@ class BacktestEngine:
 
         return max(current_loc - entry_loc, 0)
 
+    @staticmethod
+    def _is_holding_day_stop_triggered(
+        stop_strategy: Any,
+        holding_days: Optional[int],
+    ) -> bool:
+        if stop_strategy is None or holding_days is None:
+            return False
+
+        holding_day_limit = getattr(stop_strategy, "holding_day", None)
+        if holding_day_limit is None:
+            return False
+
+        try:
+            return holding_days >= int(holding_day_limit)
+        except (TypeError, ValueError):
+            return False
+
     def _is_suspended(self, row: pd.Series) -> bool:
         for column in ["open", "close", "high", "low"]:
             if column not in row or self._is_na(row[column]):
@@ -404,10 +421,15 @@ class BacktestEngine:
                     current_price,
                     holding_days=holding_days,
                 ):
+                    exit_reason = (
+                        "stop_holding"
+                        if self._is_holding_day_stop_triggered(self.stop_loss_strategy, holding_days)
+                        else "stop_loss"
+                    )
                     stop_signals[symbol] = {
                         'action': 'sell',
                         'shares': self.positions[symbol],
-                        'reason': 'stop_loss',
+                        'reason': exit_reason,
                         'entry_price': entry_price,
                         'stop_price': self.stop_loss_strategy.stop_price
                     }
@@ -432,10 +454,15 @@ class BacktestEngine:
                     current_price,
                     holding_days=holding_days,
                 ):
+                    exit_reason = (
+                        "stop_holding"
+                        if self._is_holding_day_stop_triggered(self.stop_profit_strategy, holding_days)
+                        else "stop_profit"
+                    )
                     stop_signals[symbol] = {
                         'action': 'sell',
                         'shares': self.positions[symbol],
-                        'reason': 'stop_profit',
+                        'reason': exit_reason,
                         'entry_price': entry_price,
                         'profit_price': self.stop_profit_strategy.profit_price
                     }

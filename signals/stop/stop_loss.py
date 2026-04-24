@@ -19,6 +19,18 @@ def _is_holding_day_type(loss_type: str) -> bool:
     return loss_type in {LossType.HOLDING_DAY.value, "holding_days"}
 
 
+def _is_holding_day_limit_reached(
+    holding_days: Optional[int],
+    holding_day_limit: Optional[int],
+) -> bool:
+    return (
+        holding_days is not None
+        and holding_day_limit is not None
+        and holding_day_limit > 0
+        and holding_days >= holding_day_limit
+    )
+
+
 def calculate_stop_loss_price(
     entry_price: float,
     loss_pct: float,
@@ -118,6 +130,11 @@ def stop_loss_signal(
         stop_price = calculate_stop_loss_price(entry_price, loss_pct, loss_type)
         signals = (prices <= stop_price).astype(int)
     
+    if holding_day is not None:
+        if int(holding_day) <= 0:
+            raise ValueError("holding_day must be a positive integer when provided.")
+        signals.iloc[int(holding_day):] = 1
+
     return signals
 
 
@@ -183,6 +200,9 @@ class StopLossStrategy:
         self.holding_day = int(holding_day) if holding_day is not None else None
         self.atr_window = atr_window
         self.atr_multiplier = atr_multiplier
+
+        if self.holding_day is not None and self.holding_day <= 0:
+            raise ValueError("holding_day must be a positive integer when provided.")
 
         if _is_holding_day_type(self.loss_type):
             if self.holding_day is None or self.holding_day <= 0:
@@ -268,8 +288,10 @@ class StopLossStrategy:
         """
         if not self.position_active:
             return False
+        if _is_holding_day_limit_reached(holding_days, self.holding_day):
+            return True
         if _is_holding_day_type(self.loss_type):
-            return holding_days is not None and holding_days >= self.holding_day
+            return False
         if self.stop_price is None:
             return False
         return current_price <= self.stop_price
@@ -310,9 +332,9 @@ class StopLossStrategy:
             current_high = highs.iloc[i]
             current_atr = atr.iloc[i] if atr is not None else None
             
-            self.update_stop_price(current_high, current_atr)
+            self.update_stop_price(current_high, current_atr, i)
             
-            if self.check_stop_loss(current_price):
+            if self.check_stop_loss(current_price, holding_days=i):
                 signals.iloc[i] = -1
                 break
         

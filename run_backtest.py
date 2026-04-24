@@ -194,7 +194,7 @@ def run_backtest(
 
     stock_list = data_api.get_stock_list()
     if stock_max_number != -1 and len(stock_list) > stock_max_number:
-        stock_list = stock_list[stock_max_number:]
+        stock_list = stock_list[:stock_max_number]
     logger.info(f"Stock count: {len(stock_list)}")
 
     data_iterator = tqdm(stock_list, desc="Data loading", unit="symbol", disable=False)
@@ -352,6 +352,7 @@ def run_backtest(
         logger.info(f"Average profit pct: {avg_profit_pct:.2f}%")
 
         if "reason" in filled_trades.columns:
+            stop_holding_count = len(filled_trades[filled_trades["reason"] == "stop_holding"])
             stop_loss_count = len(filled_trades[filled_trades["reason"] == "stop_loss"])
             stop_profit_count = len(filled_trades[filled_trades["reason"] == "stop_profit"])
             strategy_count = len(
@@ -360,6 +361,7 @@ def run_backtest(
                     & (filled_trades["reason"] == "strategy")
                 ]
             )
+            logger.info(f"Stop-holding exits: {stop_holding_count}")
             logger.info(f"Stop-loss exits: {stop_loss_count}")
             logger.info(f"Stop-profit exits: {stop_profit_count}")
             logger.info(f"Strategy exits: {strategy_count}")
@@ -373,6 +375,7 @@ def run_backtest(
             reason = trade.get("reason", "strategy")
             reason_map = {
                 "strategy": "strategy",
+                "stop_holding": "Stop-holding",
                 "stop_loss": "stop_loss",
                 "stop_profit": "stop_profit",
             }

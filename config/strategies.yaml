@@ -236,7 +236,7 @@ stop_strategies:
     params:
       loss_pct: 0.060
       loss_type: "atr"
-      holding_day: 20
+      holding_day: 30
       atr_window: 14
       atr_multiplier: 1
     min_data_length: 20
@@ -249,7 +249,7 @@ stop_strategies:
     params:
       profit_pct: 0.07500
       profit_type: "trailing"
-      holding_day: 20
+      holding_day: 30
       atr_window: 14
       atr_multiplier: 2
     min_data_length: 20
