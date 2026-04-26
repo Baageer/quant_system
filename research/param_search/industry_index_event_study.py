@@ -45,8 +45,8 @@ from research.param_search.conditions.registry import (  # noqa: E402
 
 
 CONDITION_NAME = "bollinger_squeeze"  # bollinger_squeeze | rsrs_breakout
-START_DATE = "2020-01-01"
-END_DATE = "2025-12-31"
+START_DATE = "2025-01-01"
+END_DATE = "2026-04-27"
 
 INDEX_LIST_FILE = PROJECT_ROOT / "data" / "raw" / "akshare" / "industry_sector_index_list.csv"
 INDEX_DATA_DIR = PROJECT_ROOT / "data" / "raw" / "akshare" / "industry_sector_index"
