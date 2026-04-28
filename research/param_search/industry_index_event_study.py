@@ -42,6 +42,7 @@ from research.param_search.conditions.registry import (  # noqa: E402
     CONDITION_PARAM_GRID_MAP,
     build_condition_frame,
 )
+from signals.indicators import obv, sma  # noqa: E402
 
 
 CONDITION_NAME = "bollinger_squeeze"  # bollinger_squeeze | rsrs_breakout
@@ -60,6 +61,16 @@ MIN_GAP_BETWEEN_EVENTS = 20
 EVENT_SELECTION = "first_in_run"  # first_in_run | all_true_days
 REQUIRE_FULL_WINDOW = True
 MIN_DATA_LENGTH = 120
+
+FLOW_AMOUNT_SHORT_WINDOW = 5
+FLOW_AMOUNT_LONG_WINDOW = 20
+FLOW_OBV_SLOPE_WINDOW = 10
+FLOW_SHARE_ZSCORE_WINDOW = 60
+INFLOW_RATIO_THRESHOLD = 1.1
+CROWDING_ZSCORE_THRESHOLD = 2.0
+LAYERED_QUANTILE_BUCKETS = 3
+MIN_LAYER_SAMPLE_COUNT = 5
+SHOW_LAYERED_ROWS = 40
 
 FORWARD_HORIZONS = [1, 5, 10, 20, 30]
 SHOW_SAMPLE_PLOTS = 8
@@ -90,6 +101,11 @@ EVENT_META_NUMERIC_COLUMNS = [
     "rsrs_r2",
     "rsrs_zscore",
     "rsrs_score",
+    "trading_value",
+    "amount_ratio_5_20",
+    "obv_slope_10",
+    "amount_share",
+    "amount_share_zscore_60",
 ]
 EVENT_META_BOOLEAN_COLUMNS = [
     "breakout_valid",
@@ -101,13 +117,25 @@ EVENT_META_BOOLEAN_COLUMNS = [
     "band_expansion_confirmation",
     "return_up_confirmation",
     "return_down_confirmation",
+    "inflow_confirmation",
+    "crowding_warning",
 ]
 EVENT_META_TEXT_COLUMNS = ["event_direction"]
+LAYERED_BOOL_COLUMNS = [
+    "inflow_confirmation",
+    "crowding_warning",
+]
+LAYERED_QUANTILE_COLUMNS = [
+    "amount_ratio_5_20",
+    "amount_share",
+    "amount_share_zscore_60",
+]
 
 
 WORKER_PRICE_CACHE = None
 WORKER_SYMBOL_NAME_MAP = None
 WORKER_CONDITION_NAME = None
+WORKER_MARKET_TRADING_VALUE_SERIES = None
 WORKER_RANK_BY_HORIZON = None
 WORKER_MIN_EVENTS_PER_EXPERIMENT = None
 
@@ -316,6 +344,86 @@ def build_price_cache(universe_df, index_data_dir, start_date, end_date, min_dat
     return price_cache, symbol_name_map, pd.DataFrame(cache_skip_rows)
 
 
+def extract_trading_value_series(price_df):
+    if "amount" in price_df.columns:
+        trading_value = pd.to_numeric(price_df["amount"], errors="coerce")
+        if trading_value.notna().any():
+            return trading_value.where(trading_value > 0)
+
+    if {"close", "volume"}.issubset(price_df.columns):
+        close = pd.to_numeric(price_df["close"], errors="coerce")
+        volume = pd.to_numeric(price_df["volume"], errors="coerce")
+        trading_value = (close * volume).where(lambda value: value > 0)
+        if trading_value.notna().any():
+            return trading_value
+
+    return pd.Series(np.nan, index=price_df.index, dtype=float)
+
+
+def build_market_trading_value_series(price_cache):
+    if not price_cache:
+        return pd.Series(dtype=float)
+
+    market_frames = []
+    for symbol, price_df in price_cache.items():
+        trading_value = extract_trading_value_series(price_df)
+        if trading_value.notna().any():
+            market_frames.append(trading_value.rename(symbol))
+
+    if not market_frames:
+        return pd.Series(dtype=float)
+
+    market_df = pd.concat(market_frames, axis=1)
+    market_total = market_df.sum(axis=1, min_count=1).sort_index()
+    return market_total
+
+
+def build_flow_feature_frame(price_df, market_trading_value_series):
+    trading_value = extract_trading_value_series(price_df)
+    amount_ma_short = sma(trading_value, FLOW_AMOUNT_SHORT_WINDOW)
+    amount_ma_long = sma(trading_value, FLOW_AMOUNT_LONG_WINDOW)
+    amount_ratio = amount_ma_short / amount_ma_long.replace(0, np.nan)
+
+    obv_slope = pd.Series(np.nan, index=price_df.index, dtype=float)
+    if {"close", "volume"}.issubset(price_df.columns):
+        close = pd.to_numeric(price_df["close"], errors="coerce")
+        volume = pd.to_numeric(price_df["volume"], errors="coerce").fillna(0.0)
+        obv_series = obv(close, volume)
+        obv_slope = (obv_series - obv_series.shift(FLOW_OBV_SLOPE_WINDOW)) / float(FLOW_OBV_SLOPE_WINDOW)
+
+    amount_share = pd.Series(np.nan, index=price_df.index, dtype=float)
+    amount_share_zscore = pd.Series(np.nan, index=price_df.index, dtype=float)
+    amount_share_ma = pd.Series(np.nan, index=price_df.index, dtype=float)
+    if market_trading_value_series is not None and not market_trading_value_series.empty:
+        market_trading_value = market_trading_value_series.reindex(price_df.index)
+        amount_share = trading_value / market_trading_value.replace(0, np.nan)
+        amount_share_ma = sma(amount_share, FLOW_AMOUNT_LONG_WINDOW)
+        min_periods = max(20, FLOW_SHARE_ZSCORE_WINDOW // 3)
+        share_mean = amount_share.rolling(window=FLOW_SHARE_ZSCORE_WINDOW, min_periods=min_periods).mean()
+        share_std = amount_share.rolling(window=FLOW_SHARE_ZSCORE_WINDOW, min_periods=min_periods).std()
+        amount_share_zscore = (amount_share - share_mean) / share_std.replace(0, np.nan)
+
+    inflow_confirmation = (
+        (amount_ratio >= INFLOW_RATIO_THRESHOLD)
+        & (obv_slope > 0)
+        & ((amount_share > amount_share_ma) | amount_share_ma.isna())
+    ).fillna(False)
+    crowding_warning = (amount_share_zscore >= CROWDING_ZSCORE_THRESHOLD).fillna(False)
+
+    return pd.DataFrame(
+        {
+            "trading_value": trading_value,
+            "amount_ratio_5_20": amount_ratio,
+            "obv_slope_10": obv_slope,
+            "amount_share": amount_share,
+            "amount_share_zscore_60": amount_share_zscore,
+            "inflow_confirmation": inflow_confirmation,
+            "crowding_warning": crowding_warning,
+        },
+        index=price_df.index,
+    )
+
+
 def extract_event_dates(condition, min_gap_between_events=0, event_selection="first_in_run"):
     condition = condition.fillna(False).astype(bool)
 
@@ -433,7 +541,132 @@ def build_event_meta_row(analysis_df, symbol, industry_name, event_date):
     return row
 
 
-def run_single_event_study(price_cache, symbol_name_map, condition_name, condition_params):
+def _qcut_bucket(series, buckets):
+    valid = pd.to_numeric(series, errors="coerce")
+    if valid.notna().sum() < buckets:
+        return pd.Series(np.nan, index=series.index, dtype=object)
+
+    ranked = valid.rank(method="first")
+    labels = [f"Q{i}" for i in range(1, buckets + 1)]
+    try:
+        bucketed = pd.qcut(ranked, q=buckets, labels=labels)
+    except ValueError:
+        return pd.Series(np.nan, index=series.index, dtype=object)
+    return bucketed.astype(object)
+
+
+def _build_layered_rows(event_outcomes_df, grouping_col, stratifier, group_type):
+    rows = []
+    for horizon in FORWARD_HORIZONS:
+        return_col = f"ret_{horizon}d"
+        if return_col not in event_outcomes_df.columns:
+            continue
+
+        base_values = event_outcomes_df[return_col].dropna()
+        if base_values.empty:
+            continue
+
+        base_mean = float(base_values.mean())
+        base_win_rate = float((base_values > 0).mean())
+
+        grouped = event_outcomes_df[[grouping_col, return_col]].dropna(subset=[grouping_col, return_col])
+        if grouped.empty:
+            continue
+
+        for bucket, group_df in grouped.groupby(grouping_col):
+            values = group_df[return_col]
+            sample_count = int(values.shape[0])
+            if sample_count < MIN_LAYER_SAMPLE_COUNT:
+                continue
+
+            mean_return = float(values.mean())
+            win_rate = float((values > 0).mean())
+            rows.append(
+                {
+                    "stratifier": stratifier,
+                    "group_type": group_type,
+                    "bucket": str(bucket),
+                    "horizon": horizon,
+                    "sample_count": sample_count,
+                    "mean_return": mean_return,
+                    "median_return": float(values.median()),
+                    "win_rate": win_rate,
+                    "p25": float(values.quantile(0.25)),
+                    "p75": float(values.quantile(0.75)),
+                    "mean_return_vs_all": mean_return - base_mean,
+                    "win_rate_vs_all": win_rate - base_win_rate,
+                }
+            )
+
+    return rows
+
+
+def build_layered_summary(event_meta, path_matrix):
+    if event_meta is None or event_meta.empty or path_matrix is None or path_matrix.empty:
+        return pd.DataFrame()
+
+    available_horizons = [h for h in FORWARD_HORIZONS if h in path_matrix.columns]
+    if not available_horizons:
+        return pd.DataFrame()
+
+    event_outcomes_df = path_matrix[available_horizons].copy()
+    event_outcomes_df.columns = [f"ret_{h}d" for h in available_horizons]
+    event_outcomes_df = event_outcomes_df.reset_index()
+
+    layer_columns = [col for col in (LAYERED_BOOL_COLUMNS + LAYERED_QUANTILE_COLUMNS) if col in event_meta.columns]
+    if not layer_columns:
+        return pd.DataFrame()
+
+    event_layer_df = (
+        event_meta[["symbol", "event_date", *layer_columns]]
+        .drop_duplicates(subset=["symbol", "event_date"], keep="last")
+    )
+    event_outcomes_df = event_outcomes_df.merge(
+        event_layer_df,
+        on=["symbol", "event_date"],
+        how="left",
+    )
+
+    layered_rows = []
+    for column in LAYERED_BOOL_COLUMNS:
+        if column not in event_outcomes_df.columns:
+            continue
+        group_col = f"{column}_group"
+        event_outcomes_df[group_col] = event_outcomes_df[column].map({True: "true", False: "false"})
+        layered_rows.extend(_build_layered_rows(event_outcomes_df, group_col, stratifier=column, group_type="bool"))
+
+    for column in LAYERED_QUANTILE_COLUMNS:
+        if column not in event_outcomes_df.columns:
+            continue
+        group_col = f"{column}_q{LAYERED_QUANTILE_BUCKETS}"
+        event_outcomes_df[group_col] = _qcut_bucket(event_outcomes_df[column], LAYERED_QUANTILE_BUCKETS)
+        layered_rows.extend(_build_layered_rows(event_outcomes_df, group_col, stratifier=column, group_type="quantile"))
+
+    if not layered_rows:
+        return pd.DataFrame()
+
+    layered_summary = pd.DataFrame(layered_rows)
+    return layered_summary.sort_values(
+        by=["stratifier", "horizon", "bucket"],
+        ascending=[True, True, True],
+    ).reset_index(drop=True)
+
+
+def _extract_layer_bucket_mean(layered_summary, stratifier, horizon, bucket):
+    if layered_summary is None or layered_summary.empty:
+        return np.nan
+    mask = (
+        (layered_summary["stratifier"] == stratifier)
+        & (layered_summary["horizon"] == int(horizon))
+        & (layered_summary["bucket"] == bucket)
+    )
+    rows = layered_summary.loc[mask]
+    if rows.empty:
+        return np.nan
+    return float(rows.iloc[0]["mean_return"])
+
+
+def run_single_event_study(price_cache, symbol_name_map, condition_name, condition_params, market_trading_value_series):
     event_windows = []
     event_rows = []
     skip_rows = []
@@ -442,7 +675,8 @@ def run_single_event_study(price_cache, symbol_name_map, condition_name, conditi
         industry_name = symbol_name_map.get(symbol, "")
         try:
             condition_frame = build_condition_frame(price_df, condition_name, condition_params)
-            analysis_df = price_df.join(condition_frame)
+            flow_feature_frame = build_flow_feature_frame(price_df, market_trading_value_series)
+            analysis_df = price_df.join(condition_frame).join(flow_feature_frame)
             analysis_df = analysis_df.dropna(subset=["close"])
 
             event_dates = extract_event_dates(
@@ -487,6 +721,7 @@ def run_single_event_study(price_cache, symbol_name_map, condition_name, conditi
 
     path_matrix = pd.DataFrame()
     forward_summary = pd.DataFrame()
+    layered_summary = pd.DataFrame()
     event_count_by_symbol = pd.Series(dtype=int)
 
     if not event_meta.empty:
@@ -518,6 +753,7 @@ def run_single_event_study(price_cache, symbol_name_map, condition_name, conditi
             )
 
         forward_summary = pd.DataFrame(forward_rows)
+        layered_summary = build_layered_summary(event_meta=event_meta, path_matrix=path_matrix)
         event_count_by_symbol = event_meta.groupby("symbol").size().sort_values(ascending=False).rename("event_count")
 
     return {
@@ -526,6 +762,7 @@ def run_single_event_study(price_cache, symbol_name_map, condition_name, conditi
         "skip_df": skip_df,
         "path_matrix": path_matrix,
         "forward_summary": forward_summary,
+        "layered_summary": layered_summary,
         "event_count_by_symbol": event_count_by_symbol,
     }
 
@@ -533,6 +770,7 @@ def run_single_event_study(price_cache, symbol_name_map, condition_name, conditi
 def summarize_experiment(experiment_id, param_label, params, result, rank_by_horizon):
     event_meta = result["event_meta"]
     forward_summary = result["forward_summary"]
+    layered_summary = result["layered_summary"]
     event_count_by_symbol = result["event_count_by_symbol"]
 
     summary = {
@@ -563,6 +801,20 @@ def summarize_experiment(experiment_id, param_label, params, result, rank_by_hor
     rank_key = f"mean_return_{rank_by_horizon}d"
     rank_value = summary.get(rank_key, np.nan)
     summary["rank_metric"] = float(rank_value) if not is_missing(rank_value) else np.nan
+    inflow_true = _extract_layer_bucket_mean(layered_summary, "inflow_confirmation", rank_by_horizon, "true")
+    inflow_false = _extract_layer_bucket_mean(layered_summary, "inflow_confirmation", rank_by_horizon, "false")
+    crowding_true = _extract_layer_bucket_mean(layered_summary, "crowding_warning", rank_by_horizon, "true")
+    crowding_false = _extract_layer_bucket_mean(layered_summary, "crowding_warning", rank_by_horizon, "false")
+    summary[f"inflow_spread_{rank_by_horizon}d"] = (
+        float(inflow_true - inflow_false)
+        if not (is_missing(inflow_true) or is_missing(inflow_false))
+        else np.nan
+    )
+    summary[f"crowding_spread_{rank_by_horizon}d"] = (
+        float(crowding_true - crowding_false)
+        if not (is_missing(crowding_true) or is_missing(crowding_false))
+        else np.nan
+    )
     return summary
 
 
@@ -574,16 +826,25 @@ def resolve_worker_count(param_sets):
     return max(1, min(requested_workers, len(param_sets)))
 
 
-def init_experiment_worker(price_cache, symbol_name_map, condition_name, rank_by_horizon, min_events_per_experiment):
+def init_experiment_worker(
+    price_cache,
+    symbol_name_map,
+    condition_name,
+    market_trading_value_series,
+    rank_by_horizon,
+    min_events_per_experiment,
+):
     global WORKER_PRICE_CACHE
     global WORKER_SYMBOL_NAME_MAP
     global WORKER_CONDITION_NAME
+    global WORKER_MARKET_TRADING_VALUE_SERIES
     global WORKER_RANK_BY_HORIZON
     global WORKER_MIN_EVENTS_PER_EXPERIMENT
 
     WORKER_PRICE_CACHE = price_cache
     WORKER_SYMBOL_NAME_MAP = symbol_name_map
     WORKER_CONDITION_NAME = condition_name
+    WORKER_MARKET_TRADING_VALUE_SERIES = market_trading_value_series
     WORKER_RANK_BY_HORIZON = rank_by_horizon
     WORKER_MIN_EVENTS_PER_EXPERIMENT = min_events_per_experiment
 
@@ -595,6 +856,7 @@ def run_experiment_scan_task(task):
         symbol_name_map=WORKER_SYMBOL_NAME_MAP,
         condition_name=WORKER_CONDITION_NAME,
         condition_params=params,
+        market_trading_value_series=WORKER_MARKET_TRADING_VALUE_SERIES,
     )
     summary_row = summarize_experiment(
         experiment_id=experiment_id,
@@ -618,12 +880,20 @@ def run_experiment_scan_task(task):
         "params": params,
         "summary_row": summary_row,
         "forward_summary": result["forward_summary"],
+        "layered_summary": result["layered_summary"],
         "event_meta": result["event_meta"],
         "qualified_result": qualified_result,
     }
 
 
-def collect_experiment_output(output, experiment_results, grid_summary_rows, forward_summary_frames, event_meta_frames):
+def collect_experiment_output(
+    output,
+    experiment_results,
+    grid_summary_rows,
+    forward_summary_frames,
+    layered_summary_frames,
+    event_meta_frames,
+):
     experiment_id = output["experiment_id"]
     param_label = output["param_label"]
 
@@ -635,6 +905,12 @@ def collect_experiment_output(output, experiment_results, grid_summary_rows, for
         frame["param_label"] = param_label
         forward_summary_frames.append(frame)
 
+    if not output["layered_summary"].empty:
+        frame = output["layered_summary"].copy()
+        frame["experiment_id"] = experiment_id
+        frame["param_label"] = param_label
+        layered_summary_frames.append(frame)
+
     if not output["event_meta"].empty:
         frame = output["event_meta"].copy()
         frame["experiment_id"] = experiment_id
@@ -645,13 +921,14 @@ def collect_experiment_output(output, experiment_results, grid_summary_rows, for
         experiment_results[experiment_id] = output["qualified_result"]
 
 
-def scan_parameters_serial(param_sets, price_cache, symbol_name_map):
+def scan_parameters_serial(param_sets, price_cache, symbol_name_map, market_trading_value_series):
     for experiment_id, param_label, params in tqdm(param_sets, desc="Exploring params", unit="experiment"):
         result = run_single_event_study(
             price_cache=price_cache,
             symbol_name_map=symbol_name_map,
             condition_name=CONDITION_NAME,
             condition_params=params,
+            market_trading_value_series=market_trading_value_series,
         )
         summary_row = summarize_experiment(
             experiment_id=experiment_id,
@@ -675,19 +952,27 @@ def scan_parameters_serial(param_sets, price_cache, symbol_name_map):
             "params": params,
             "summary_row": summary_row,
             "forward_summary": result["forward_summary"],
+            "layered_summary": result["layered_summary"],
             "event_meta": result["event_meta"],
             "qualified_result": qualified_result,
         }
 
 
-def scan_parameters_parallel(param_sets, price_cache, symbol_name_map):
+def scan_parameters_parallel(param_sets, price_cache, symbol_name_map, market_trading_value_series):
     worker_count = resolve_worker_count(param_sets)
     mp_context = multiprocessing.get_context("spawn")
     with ProcessPoolExecutor(
         max_workers=worker_count,
         mp_context=mp_context,
         initializer=init_experiment_worker,
-        initargs=(price_cache, symbol_name_map, CONDITION_NAME, RANK_BY_HORIZON, MIN_EVENTS_PER_EXPERIMENT),
+        initargs=(
+            price_cache,
+            symbol_name_map,
+            CONDITION_NAME,
+            market_trading_value_series,
+            RANK_BY_HORIZON,
+            MIN_EVENTS_PER_EXPERIMENT,
+        ),
     ) as executor:
         results = executor.map(
             run_experiment_scan_task,
@@ -698,12 +983,12 @@ def scan_parameters_parallel(param_sets, price_cache, symbol_name_map):
             yield output
 
 
-def scan_parameters(param_sets, price_cache, symbol_name_map):
+def scan_parameters(param_sets, price_cache, symbol_name_map, market_trading_value_series):
     should_use_multiprocessing = USE_MULTIPROCESSING and len(param_sets) > 1
     if should_use_multiprocessing:
-        yield from scan_parameters_parallel(param_sets, price_cache, symbol_name_map)
+        yield from scan_parameters_parallel(param_sets, price_cache, symbol_name_map, market_trading_value_series)
         return
-    yield from scan_parameters_serial(param_sets, price_cache, symbol_name_map)
+    yield from scan_parameters_serial(param_sets, price_cache, symbol_name_map, market_trading_value_series)
 
 
 def select_best_experiment(grid_summary_df, experiment_results):
@@ -761,17 +1046,19 @@ def plot_best_result(best_experiment_id, best_result):
     plt.show()
 
 
-def export_scan_results(grid_summary_df, forward_summary_all_df, event_meta_all_df, best_result):
+def export_scan_results(grid_summary_df, forward_summary_all_df, layered_summary_all_df, event_meta_all_df, best_result):
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     suffix = f"industry_{CONDITION_NAME}_{START_DATE}_{END_DATE}".replace(":", "-")
     grid_summary_df.to_csv(OUTPUT_DIR / f"grid_summary_{suffix}.csv", index=False, encoding="utf-8-sig")
     forward_summary_all_df.to_csv(OUTPUT_DIR / f"grid_forward_summary_{suffix}.csv", index=False, encoding="utf-8-sig")
+    layered_summary_all_df.to_csv(OUTPUT_DIR / f"grid_layered_summary_{suffix}.csv", index=False, encoding="utf-8-sig")
     event_meta_all_df.to_csv(OUTPUT_DIR / f"grid_event_meta_{suffix}.csv", index=False, encoding="utf-8-sig")
 
     best_result["event_meta"].to_csv(OUTPUT_DIR / f"best_event_meta_{suffix}.csv", index=False, encoding="utf-8-sig")
     best_result["event_window_df"].to_csv(OUTPUT_DIR / f"best_event_windows_{suffix}.csv", index=False, encoding="utf-8-sig")
     best_result["forward_summary"].to_csv(OUTPUT_DIR / f"best_forward_summary_{suffix}.csv", index=False, encoding="utf-8-sig")
+    best_result["layered_summary"].to_csv(OUTPUT_DIR / f"best_layered_summary_{suffix}.csv", index=False, encoding="utf-8-sig")
 
     print(f"Exported results to: {OUTPUT_DIR}")
 
@@ -790,6 +1077,12 @@ def build_runtime_summary(universe_df):
             "min_gap_between_events": MIN_GAP_BETWEEN_EVENTS,
             "event_selection": EVENT_SELECTION,
             "require_full_window": REQUIRE_FULL_WINDOW,
+            "flow_amount_short_window": FLOW_AMOUNT_SHORT_WINDOW,
+            "flow_amount_long_window": FLOW_AMOUNT_LONG_WINDOW,
+            "flow_obv_slope_window": FLOW_OBV_SLOPE_WINDOW,
+            "flow_share_zscore_window": FLOW_SHARE_ZSCORE_WINDOW,
+            "layered_quantile_buckets": LAYERED_QUANTILE_BUCKETS,
+            "min_layer_sample_count": MIN_LAYER_SAMPLE_COUNT,
             "rank_by_horizon": RANK_BY_HORIZON,
             "top_n_experiments": TOP_N_EXPERIMENTS,
             "min_events_per_experiment": MIN_EVENTS_PER_EXPERIMENT,
@@ -838,6 +1131,16 @@ def main():
     display(cache_summary.to_frame("value"))
     display(cache_skip_df.head(10))
 
+    market_trading_value_series = build_market_trading_value_series(price_cache)
+    # print(market_trading_value_series.head())
+    market_flow_summary = pd.Series(
+        {
+            "market_flow_points": int(len(market_trading_value_series)),
+            "market_flow_non_null_points": int(market_trading_value_series.notna().sum()) if not market_trading_value_series.empty else 0,
+        }
+    )
+    display(market_flow_summary.to_frame("value"))
+
     param_sets = list(iter_param_sets(BASE_CONDITION_PARAMS, CONDITION_PARAM_GRID, MAX_EXPERIMENTS))
     print(f"Running {len(param_sets)} experiments...")
     if USE_MULTIPROCESSING and len(param_sets) > 1:
@@ -848,14 +1151,16 @@ def main():
     experiment_results = {}
     grid_summary_rows = []
     forward_summary_frames = []
+    layered_summary_frames = []
     event_meta_frames = []
 
-    for output in scan_parameters(param_sets, price_cache, symbol_name_map):
+    for output in scan_parameters(param_sets, price_cache, symbol_name_map, market_trading_value_series):
         collect_experiment_output(
             output,
             experiment_results=experiment_results,
             grid_summary_rows=grid_summary_rows,
             forward_summary_frames=forward_summary_frames,
+            layered_summary_frames=layered_summary_frames,
             event_meta_frames=event_meta_frames,
         )
 
@@ -868,17 +1173,20 @@ def main():
         ).reset_index(drop=True)
 
     forward_summary_all_df = pd.concat(forward_summary_frames, ignore_index=True) if forward_summary_frames else pd.DataFrame()
+    layered_summary_all_df = pd.concat(layered_summary_frames, ignore_index=True) if layered_summary_frames else pd.DataFrame()
     event_meta_all_df = pd.concat(event_meta_frames, ignore_index=True) if event_meta_frames else pd.DataFrame()
 
     print(f"Experiments with >= {MIN_EVENTS_PER_EXPERIMENT} events: {len(experiment_results)}")
     display(grid_summary_df.head(TOP_N_EXPERIMENTS))
     display(forward_summary_all_df.head(20))
+    display(layered_summary_all_df.head(SHOW_LAYERED_ROWS))
 
     best_experiment_id, best_result = select_best_experiment(grid_summary_df, experiment_results)
     print(f"Best experiment_id = {best_experiment_id}")
     print(best_result["param_label"])
     display(pd.Series(best_result["params"], name="value").to_frame())
     display(best_result["forward_summary"])
+    display(best_result["layered_summary"].head(SHOW_LAYERED_ROWS))
     display(best_result["event_count_by_symbol"].head(20).to_frame())
     # display(best_result["event_meta"].head(10))
 
@@ -886,7 +1194,7 @@ def main():
         plot_best_result(best_experiment_id, best_result)
 
     if EXPORT_RESULTS:
-        export_scan_results(grid_summary_df, forward_summary_all_df, event_meta_all_df, best_result)
+        export_scan_results(grid_summary_df, forward_summary_all_df, layered_summary_all_df, event_meta_all_df, best_result)
 
 
 if __name__ == "__main__":
