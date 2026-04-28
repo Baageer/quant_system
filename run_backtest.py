@@ -9,8 +9,10 @@ Supports:
 
 import argparse
 import os
+import re
 from datetime import datetime
-from typing import List, Optional, Union
+from pathlib import Path
+from typing import Dict, List, Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -24,6 +26,22 @@ from data.data_api import DataAPI
 from signals.signal_engine import SignalEngine
 from signals.strategy_loader import StrategyLoader
 from utils.logger import setup_logger
+
+
+PRICE_COLUMNS = [
+    "date",
+    "code",
+    "open",
+    "close",
+    "high",
+    "low",
+    "volume",
+    "amount",
+    "amplitude",
+    "pct_change",
+    "change",
+    "turnover",
+]
 
 
 def create_strategy_function(trade_amount):
@@ -82,6 +100,228 @@ def calculate_annual_portfolio_returns(results: pd.DataFrame) -> pd.Series:
     return annual_returns.sort_index()
 
 
+def normalize_code(value: object) -> str:
+    """Normalize industry index code to 6-digit style when possible."""
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if not text or text.lower() in {"none", "null", "nan"}:
+        return ""
+    if text.endswith(".0"):
+        text = text[:-2]
+    return text.zfill(6) if text.isdigit() else text
+
+
+def normalize_text(value: object) -> str:
+    """Normalize generic text values for robust CSV parsing."""
+    if value is None:
+        return ""
+    text = str(value).strip()
+    return "" if text.lower() in {"none", "null", "nan"} else text
+
+
+def pick_column(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
+    """Pick the first matching column by exact or case-insensitive name."""
+    lower_to_original = {str(col).strip().lower(): col for col in df.columns}
+    for candidate in candidates:
+        if candidate in df.columns:
+            return candidate
+        match = lower_to_original.get(candidate.lower())
+        if match is not None:
+            return match
+    return None
+
+
+def read_csv_with_fallback(filepath: Union[str, Path]) -> pd.DataFrame:
+    """Read csv with common encodings used in this repo."""
+    last_error = None
+    for encoding in ("utf-8-sig", "utf-8", "gbk", "gb18030"):
+        try:
+            return pd.read_csv(filepath, encoding=encoding)
+        except UnicodeDecodeError as exc:
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    return pd.read_csv(filepath)
+
+
+def standardize_index_list(index_list_df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize industry index universe file to a stable schema."""
+    if index_list_df is None or index_list_df.empty:
+        return pd.DataFrame(columns=["index_code", "industry_name", "link"])
+
+    df = index_list_df.copy()
+    df.columns = [str(col).strip() for col in df.columns]
+    code_col = pick_column(df, ["index_code", "code", "industry_code", "板块代码", "行业代码"])
+    name_col = pick_column(df, ["industry_name", "name", "board_name", "板块名称", "行业名称"])
+    link_col = pick_column(df, ["link", "source_link", "url"])
+
+    if code_col is None or name_col is None:
+        raise ValueError("Industry index list must contain index_code and industry_name columns.")
+
+    result = pd.DataFrame(
+        {
+            "index_code": df[code_col].map(normalize_code),
+            "industry_name": df[name_col].map(normalize_text),
+            "link": df[link_col].map(normalize_text) if link_col is not None else "",
+        }
+    )
+    result = result[(result["index_code"] != "") & (result["industry_name"] != "")]
+    return result.drop_duplicates(subset=["index_code"]).reset_index(drop=True)
+
+
+def load_industry_universe(
+    index_list_file: Union[str, Path],
+    index_codes: Optional[List[str]] = None,
+    max_indexes: int = -1,
+) -> pd.DataFrame:
+    """Load industry index universe with optional code filter and top-n cap."""
+    list_df = read_csv_with_fallback(index_list_file)
+    universe_df = standardize_index_list(list_df)
+
+    if index_codes is not None:
+        keep_codes = {normalize_code(code) for code in index_codes if normalize_code(code)}
+        universe_df = universe_df[universe_df["index_code"].isin(keep_codes)].reset_index(drop=True)
+
+    if max_indexes is not None and max_indexes > 0:
+        universe_df = universe_df.head(max_indexes).reset_index(drop=True)
+
+    return universe_df
+
+
+def build_index_file_lookup(index_data_dir: Union[str, Path]) -> Dict[str, Path]:
+    """Build code->latest csv path mapping from industry index directory."""
+    data_dir = Path(index_data_dir)
+    pattern = re.compile(r"^(?P<code>\d{6})_(?P<start>\d{8})_(?P<end>\d{8})\.csv$")
+    best_file_map: Dict[str, tuple] = {}
+
+    for csv_path in sorted(data_dir.glob("*.csv")):
+        match = pattern.match(csv_path.name)
+        if not match:
+            continue
+
+        code = match.group("code")
+        start_date = match.group("start")
+        end_date = match.group("end")
+        if code not in best_file_map:
+            best_file_map[code] = (start_date, end_date, csv_path)
+            continue
+
+        old_start, old_end, _ = best_file_map[code]
+        if end_date > old_end or (end_date == old_end and start_date < old_start):
+            best_file_map[code] = (start_date, end_date, csv_path)
+
+    return {code: payload[2] for code, payload in best_file_map.items()}
+
+
+def standardize_industry_price_frame(raw_df: pd.DataFrame, symbol: str) -> pd.DataFrame:
+    """Convert industry index data to the shared 12-column daily schema."""
+    if raw_df is None or raw_df.empty:
+        return pd.DataFrame(columns=PRICE_COLUMNS)
+
+    df = raw_df.copy()
+    rename_map = {}
+    for column in df.columns:
+        name = str(column).strip()
+        name_lower = name.lower()
+
+        if name in {"日期", "交易日期"} or name_lower in {"date", "datetime"}:
+            rename_map[column] = "date"
+        elif name in {"开盘价", "开盘"} or name_lower == "open":
+            rename_map[column] = "open"
+        elif name in {"最高价", "最高"} or name_lower == "high":
+            rename_map[column] = "high"
+        elif name in {"最低价", "最低"} or name_lower == "low":
+            rename_map[column] = "low"
+        elif name in {"收盘价", "收盘"} or name_lower == "close":
+            rename_map[column] = "close"
+        elif name in {"成交量"} or name_lower in {"volume", "vol"}:
+            rename_map[column] = "volume"
+        elif name in {"成交额"} or name_lower in {"amount", "turnover"}:
+            rename_map[column] = "amount"
+        elif name_lower in {"index_code", "code", "symbol"}:
+            rename_map[column] = "code"
+
+    df = df.rename(columns=rename_map)
+    if "date" not in df.columns:
+        raise ValueError("Industry index data is missing date column.")
+
+    if "code" not in df.columns:
+        df["code"] = symbol
+    else:
+        df["code"] = df["code"].map(normalize_code).replace("", symbol)
+
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df = df[df["date"].notnull()].copy()
+
+    numeric_columns = [
+        "open",
+        "close",
+        "high",
+        "low",
+        "volume",
+        "amount",
+        "amplitude",
+        "pct_change",
+        "change",
+        "turnover",
+    ]
+    for column in numeric_columns:
+        if column not in df.columns:
+            df[column] = np.nan
+        df[column] = pd.to_numeric(df[column], errors="coerce")
+
+    if df["change"].isnull().all():
+        df["change"] = df["close"].diff()
+    if df["pct_change"].isnull().all():
+        previous_close = df["close"].shift(1)
+        df["pct_change"] = (df["close"] / previous_close - 1.0) * 100.0
+    if df["amplitude"].isnull().all():
+        previous_close = df["close"].shift(1).where(df["close"].shift(1) != 0, np.nan)
+        df["amplitude"] = (df["high"] - df["low"]) / previous_close * 100.0
+
+    df = df[PRICE_COLUMNS].sort_values("date")
+    df = df.drop_duplicates(subset=["date"], keep="last")
+    return df.reset_index(drop=True)
+
+
+def apply_signals_to_dataframe(
+    df: pd.DataFrame,
+    strategies: List[object],
+    signal_engine: SignalEngine,
+    signal_weights: List[float],
+    signal_combination: str,
+    signal_threshold: float,
+) -> pd.DataFrame:
+    """Generate and attach signal series using configured strategy logic."""
+    if len(strategies) == 1:
+        df["signal"] = strategies[0].generate_signal(df)
+        return df
+
+    signals_list = [strategy.generate_signal(df) for strategy in strategies]
+    combined_signal = signal_engine.combine_signals(signals_list, signal_weights)
+
+    if signal_combination == "weighted":
+        df["signal"] = combined_signal.apply(
+            lambda x: 1 if x >= signal_threshold else (-1 if x <= -signal_threshold else 0)
+        )
+    elif signal_combination == "voting":
+        vote_signal = pd.Series(0, index=df.index)
+        for signal in signals_list:
+            vote_signal += signal
+        df["signal"] = vote_signal.apply(lambda x: 1 if x > 0 else (-1 if x < 0 else 0))
+    elif signal_combination == "unanimous":
+        df["signal"] = combined_signal.apply(
+            lambda x: 1 if x >= (len(strategies) - 0.5) else (-1 if x <= -(len(strategies) - 0.5) else 0)
+        )
+    else:
+        df["signal"] = combined_signal.apply(
+            lambda x: 1 if x >= signal_threshold else (-1 if x <= -signal_threshold else 0)
+        )
+
+    return df
+
+
 def run_backtest(
     strategy_name: Union[str, List[str]],
     start_date: str = None,
@@ -98,6 +338,10 @@ def run_backtest(
     signal_combination: str = "weighted",
     signal_weights: Optional[List[float]] = None,
     signal_threshold: float = 0.5,
+    universe_type: str = "stock",
+    industry_index_list_file: Optional[str] = None,
+    industry_index_data_dir: Optional[str] = None,
+    industry_index_codes: Optional[List[str]] = None,
 ):
     """Run a configured backtest."""
 
@@ -141,6 +385,16 @@ def run_backtest(
         stock_file = config["data"].get("stock_file", "./data/test1.txt")
     if adjust_mode is None:
         adjust_mode = config["data"].get("adjust_mode", "hfq")
+    if industry_index_list_file is None:
+        industry_index_list_file = config["data"].get(
+            "industry_index_list_file",
+            "./data/raw/akshare/industry_sector_index_list.csv",
+        )
+    if industry_index_data_dir is None:
+        industry_index_data_dir = config["data"].get(
+            "industry_index_data_dir",
+            "./data/raw/akshare/industry_sector_index",
+        )
 
     data_source = config["data"].get("source", "akshare")
 
@@ -168,10 +422,17 @@ def run_backtest(
             logger.info(f"Signal threshold: {signal_threshold}")
 
     logger.info(f"Backtest period: {start_date} to {end_date}")
+    logger.info(f"Universe type: {universe_type}")
     logger.info(f"Adjust mode: {adjust_mode or 'raw'}")
     logger.info(f"Initial capital: {initial_capital:,.2f}")
     logger.info(f"Trade amount: {trade_amount:,.2f}")
-    logger.info(f"Stock file: {stock_file}")
+    if universe_type == "industry":
+        logger.info(f"Industry index list: {industry_index_list_file}")
+        logger.info(f"Industry data dir: {industry_index_data_dir}")
+        if industry_index_codes:
+            logger.info(f"Industry code filter: {','.join(industry_index_codes)}")
+    else:
+        logger.info(f"Stock file: {stock_file}")
 
     if stop_loss_strategy:
         logger.info(f"Stop loss enabled: {stop_loss_info['params']}")
@@ -184,51 +445,88 @@ def run_backtest(
         logger.info("Stop profit disabled")
     logger.info("=" * 60)
 
-    data_api = DataAPI(
-        source=data_source,
-        stock_file=stock_file,
-        cache_dir=config["data"]["cache_dir"],
-        processed_dir=config["data"]["processed_dir"],
-        adjust_mode=adjust_mode,
+    data_api = None
+    universe_type = (universe_type or "stock").strip().lower()
+    if universe_type not in {"stock", "industry"}:
+        raise ValueError(f"Unsupported universe_type: {universe_type}. Expected stock or industry.")
+
+    symbols: List[str] = []
+    industry_name_map: Dict[str, str] = {}
+    industry_file_lookup: Dict[str, Path] = {}
+    if universe_type == "industry":
+        if not os.path.exists(industry_index_list_file):
+            raise FileNotFoundError(f"Industry index list file not found: {industry_index_list_file}")
+        if not os.path.exists(industry_index_data_dir):
+            raise FileNotFoundError(f"Industry index data directory not found: {industry_index_data_dir}")
+
+        universe_df = load_industry_universe(
+            index_list_file=industry_index_list_file,
+            index_codes=industry_index_codes,
+            max_indexes=stock_max_number,
+        )
+        if universe_df.empty:
+            raise ValueError("No industry indexes found in universe after filters.")
+
+        symbols = universe_df["index_code"].tolist()
+        industry_name_map = dict(zip(universe_df["index_code"], universe_df["industry_name"]))
+        industry_file_lookup = build_index_file_lookup(industry_index_data_dir)
+        logger.info(f"Industry index count: {len(symbols)}")
+    else:
+        data_api = DataAPI(
+            source=data_source,
+            stock_file=stock_file,
+            cache_dir=config["data"]["cache_dir"],
+            processed_dir=config["data"]["processed_dir"],
+            adjust_mode=adjust_mode,
+        )
+        symbols = data_api.get_stock_list()
+        if stock_max_number != -1 and len(symbols) > stock_max_number:
+            symbols = symbols[:stock_max_number]
+        logger.info(f"Stock count: {len(symbols)}")
+
+    data_iterator = tqdm(
+        symbols,
+        desc="Data loading",
+        unit="index" if universe_type == "industry" else "symbol",
+        disable=False,
     )
-
-    stock_list = data_api.get_stock_list()
-    if stock_max_number != -1 and len(stock_list) > stock_max_number:
-        stock_list = stock_list[:stock_max_number]
-    logger.info(f"Stock count: {len(stock_list)}")
-
-    data_iterator = tqdm(stock_list, desc="Data loading", unit="symbol", disable=False)
     data = {}
 
     for symbol in data_iterator:
-        df = data_api.get_price_history_data(symbol, start_date, end_date)
-        df.columns = [
-            "date",
-            "code",
-            "open",
-            "close",
-            "high",
-            "low",
-            "volume",
-            "amount",
-            "amplitude",
-            "pct_change",
-            "change",
-            "turnover",
-        ]
+        if universe_type == "industry":
+            csv_path = industry_file_lookup.get(symbol)
+            if csv_path is None:
+                industry_name = industry_name_map.get(symbol, "")
+                logger.warning(f"Skipping {symbol} ({industry_name}): missing industry index csv file")
+                continue
+            raw_df = read_csv_with_fallback(csv_path)
+            df = standardize_industry_price_frame(raw_df, symbol)
+            df = df[
+                pd.to_datetime(df["date"], errors="coerce").between(
+                    pd.Timestamp(start_date),
+                    pd.Timestamp(end_date),
+                    inclusive="both",
+                )
+            ].reset_index(drop=True)
+        else:
+            if data_api is None:
+                raise RuntimeError("DataAPI is not initialized for stock universe.")
+            df = data_api.get_price_history_data(symbol, start_date, end_date)
+            df.columns = PRICE_COLUMNS
 
         df["date"] = pd.to_datetime(df["date"])
         df = df.set_index("date")
         df = df.sort_index()
 
-        invalid_prices = data_api.detect_non_positive_prices(df)
+        invalid_prices = DataAPI.detect_non_positive_prices(df)
         if invalid_prices:
             invalid_summary = ", ".join(
                 f"{column}={count}" for column, count in invalid_prices.items()
             )
+            adjust_mode_label = data_api.adjust_mode_label if data_api is not None else "raw"
             logger.warning(
                 f"Skipping {symbol}: found non-positive prices under "
-                f"adjust_mode={data_api.adjust_mode_label} ({invalid_summary})"
+                f"adjust_mode={adjust_mode_label} ({invalid_summary})"
             )
             continue
 
@@ -237,44 +535,23 @@ def run_backtest(
             data[symbol] = df
             continue
 
-        if len(strategies) == 1:
-            df["signal"] = strategies[0].generate_signal(df)
-        else:
-            signals_list = [strategy.generate_signal(df) for strategy in strategies]
-            combined_signal = signal_engine.combine_signals(signals_list, signal_weights)
-
-            if signal_combination == "weighted":
-                df["signal"] = combined_signal.apply(
-                    lambda x: 1 if x >= signal_threshold else (-1 if x <= -signal_threshold else 0)
-                )
-            elif signal_combination == "voting":
-                vote_signal = pd.Series(0, index=df.index)
-                for signal in signals_list:
-                    vote_signal += signal
-                df["signal"] = vote_signal.apply(
-                    lambda x: 1 if x > 0 else (-1 if x < 0 else 0)
-                )
-            elif signal_combination == "unanimous":
-                print(combined_signal.describe())
-                df["signal"] = combined_signal.apply(
-                    lambda x: (
-                        1
-                        if x >= (len(strategies) - 0.5)
-                        else (-1 if x <= -(len(strategies) - 0.5) else 0)
-                    )
-                )
-            else:
-                df["signal"] = combined_signal.apply(
-                    lambda x: 1 if x >= signal_threshold else (-1 if x <= -signal_threshold else 0)
-                )
+        df = apply_signals_to_dataframe(
+            df=df,
+            strategies=strategies,
+            signal_engine=signal_engine,
+            signal_weights=signal_weights,
+            signal_combination=signal_combination,
+            signal_threshold=signal_threshold,
+        )
 
         data[symbol] = df
         data_iterator.set_postfix({"loading": symbol})
 
     if not data:
+        adjust_mode_label = data_api.adjust_mode_label if data_api is not None else "raw"
         raise ValueError(
             f"No valid price data loaded for backtest. "
-            f"Please check stock universe and adjust_mode={data_api.adjust_mode_label}."
+            f"Please check universe and adjust_mode={adjust_mode_label}."
         )
 
     engine = BacktestEngine(
@@ -519,6 +796,31 @@ def main():
         default=-1,
         help="backtest max number of stock",
     )
+    parser.add_argument(
+        "--universe-type",
+        type=str,
+        default="stock",
+        choices=["stock", "industry"],
+        help="Backtest universe type: stock or industry index",
+    )
+    parser.add_argument(
+        "--industry-index-list-file",
+        type=str,
+        default=None,
+        help="Industry index universe list csv path",
+    )
+    parser.add_argument(
+        "--industry-index-data-dir",
+        type=str,
+        default=None,
+        help="Industry index price csv directory",
+    )
+    parser.add_argument(
+        "--industry-index-codes",
+        type=str,
+        default=None,
+        help="Comma-separated industry index codes, for example 881121,881273",
+    )
 
     args = parser.parse_args()
 
@@ -532,6 +834,10 @@ def main():
     signal_weights = None
     if args.signal_weights:
         signal_weights = [float(w.strip()) for w in args.signal_weights.split(",")]
+
+    industry_index_codes = None
+    if args.industry_index_codes:
+        industry_index_codes = [code.strip() for code in args.industry_index_codes.split(",") if code.strip()]
 
     run_backtest(
         strategy_name=strategy_names if len(strategy_names) > 1 else strategy_names[0],
@@ -549,6 +855,10 @@ def main():
         signal_combination=args.signal_combination,
         signal_weights=signal_weights,
         signal_threshold=args.signal_threshold,
+        universe_type=args.universe_type,
+        industry_index_list_file=args.industry_index_list_file,
+        industry_index_data_dir=args.industry_index_data_dir,
+        industry_index_codes=industry_index_codes,
     )
 
 
