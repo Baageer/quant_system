@@ -45,7 +45,7 @@ from research.param_search.conditions.registry import (  # noqa: E402
 from signals.indicators import obv, sma  # noqa: E402
 
 
-CONDITION_NAME = "bollinger_squeeze"  # bollinger_squeeze | rsrs_breakout
+CONDITION_NAME = "bollinger_squeeze"  # bollinger_squeeze | bollinger_squeeze_pullback | rsrs_breakout
 START_DATE = "2025-01-01"
 END_DATE = "2026-04-27"
 
@@ -101,6 +101,8 @@ EVENT_META_NUMERIC_COLUMNS = [
     "rsrs_r2",
     "rsrs_zscore",
     "rsrs_score",
+    "pullback_reference_price",
+    "bars_since_breakout",
     "trading_value",
     "amount_ratio_5_20",
     "obv_slope_10",
@@ -109,6 +111,7 @@ EVENT_META_NUMERIC_COLUMNS = [
 ]
 EVENT_META_BOOLEAN_COLUMNS = [
     "breakout_valid",
+    "pullback_valid",
     "volume_confirmation",
     "trend_long_confirmation",
     "trend_short_confirmation",

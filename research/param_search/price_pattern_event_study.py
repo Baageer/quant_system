@@ -61,7 +61,7 @@ from research.param_search.conditions.registry import (
     build_condition_frame,
 )
 
-CONDITION_NAME = "rsrs_breakout"  # bollinger_squeeze | rsrs_breakout
+CONDITION_NAME = "rsrs_breakout"  # bollinger_squeeze | bollinger_squeeze_pullback | rsrs_breakout
 START_DATE = "2020-01-01"
 END_DATE = "2024-12-31"
 
@@ -289,9 +289,12 @@ EVENT_META_NUMERIC_COLUMNS = [
     "rsrs_r2",
     "rsrs_zscore",
     "rsrs_score",
+    "pullback_reference_price",
+    "bars_since_breakout",
 ]
 EVENT_META_BOOLEAN_COLUMNS = [
     "breakout_valid",
+    "pullback_valid",
     "volume_confirmation",
     "trend_long_confirmation",
     "trend_short_confirmation",

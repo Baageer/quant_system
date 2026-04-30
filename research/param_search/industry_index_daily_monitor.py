@@ -30,7 +30,7 @@ from research.param_search.conditions.registry import (  # noqa: E402
 )
 
 
-CONDITION_NAME = "bollinger_squeeze"
+CONDITION_NAME = "bollinger_squeeze"  # bollinger_squeeze | bollinger_squeeze_pullback | rsrs_breakout
 START_DATE = "2025-01-01"
 REFRESH_LOOKBACK_DAYS = 120
 MIN_DATA_LENGTH = 120
@@ -67,6 +67,9 @@ REPORT_COLUMNS = [
     "rsrs_zscore",
     "condition",
     "breakout_valid",
+    "pullback_valid",
+    "pullback_reference_price",
+    "bars_since_breakout",
     "volume_confirmation",
     "trend_long_confirmation",
 ]
