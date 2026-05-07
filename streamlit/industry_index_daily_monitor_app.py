@@ -451,35 +451,53 @@ def build_ma20_heatmap_figure(pivot_df):
         return None
 
     rows_count = len(pivot_df.index)
+    row_labels = pivot_df.index.tolist()
+    max_label_length = max((len(str(label)) for label in row_labels), default=0)
+    left_margin = min(max(140, max_label_length * 9), 320)
     max_abs = float(pivot_df.abs().quantile(0.95).max()) if not pivot_df.empty else 5.0
     max_abs = max(3.0, min(max_abs, 15.0))
 
-    x_values = pd.to_datetime(pivot_df.columns, errors="coerce")
+    x_dates = pd.to_datetime(pivot_df.columns, errors="coerce")
+    x_values = [date.strftime("%Y-%m-%d") if pd.notna(date) else str(column) for date, column in zip(x_dates, pivot_df.columns)]
+    x_tick_text = [date.strftime("%m-%d") if pd.notna(date) else str(column) for date, column in zip(x_dates, pivot_df.columns)]
 
     fig = go.Figure(
         data=go.Heatmap(
             z=pivot_df.values,
             x=x_values,
-            y=pivot_df.index.tolist(),
+            y=row_labels,
             colorscale="RdYlGn_r",
             zmid=0.0,
             zmin=-max_abs,
             zmax=max_abs,
             colorbar=dict(title="收盘-MA20偏离(%)"),
-            hovertemplate="行业: %{y}<br>日期: %{x|%Y-%m-%d}<br>偏离: %{z:.2f}%<extra></extra>",
+            hovertemplate="行业: %{y}<br>日期: %{x}<br>偏离: %{z:.2f}%<extra></extra>",
         )
     )
     fig.update_layout(
-        height=min(max(420, 22 * rows_count + 140), 1400),
-        margin=dict(l=20, r=20, t=50, b=20),
+        height=max(420, 22 * rows_count + 140),
+        margin=dict(l=left_margin, r=20, t=50, b=20),
         xaxis_title="交易日",
         yaxis_title="行业",
     )
-    fig.update_xaxes(type="date", tickformat="%m-%d", tickangle=-45)
+    fig.update_xaxes(
+        type="category",
+        categoryorder="array",
+        categoryarray=x_values,
+        tickmode="array",
+        tickvals=x_values,
+        ticktext=x_tick_text,
+        tickangle=-45,
+    )
     fig.update_yaxes(
         autorange="reversed",
         categoryorder="array",
-        categoryarray=pivot_df.index.tolist(),
+        categoryarray=row_labels,
+        tickmode="array",
+        tickvals=row_labels,
+        ticktext=row_labels,
+        tickfont=dict(size=10 if rows_count >= 80 else 11),
+        automargin=True,
     )
     return fig
 
