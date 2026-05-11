@@ -1,6 +1,7 @@
 import pandas as pd
 
-from signals.indicators import rsrs, sma
+from research.param_search.conditions.filters import build_common_filter_context
+from signals.indicators import rsrs
 
 
 def build_rsrs_breakout_condition(df, params):
@@ -34,46 +35,25 @@ def build_rsrs_breakout_condition(df, params):
     breakout_up = (rsrs_score >= threshold).fillna(False)
     breakout_down = (rsrs_score <= -threshold).fillna(False)
 
-    volume_confirmation = pd.Series(True, index=df.index, dtype=bool)
-    if params.get("use_volume_filter", False):
-        if "volume" not in df.columns:
-            raise ValueError("volume column is required when use_volume_filter=True")
-        volume_window = max(int(params.get("volume_window", 20)), 2)
-        volume_multiplier = float(params.get("volume_multiplier", 1.2))
-        volume_ma = sma(df["volume"], volume_window)
-        volume_confirmation = (
-            (df["volume"] >= volume_ma * volume_multiplier)
-            & (df["volume"] > df["volume"].shift(1))
-        ).fillna(False)
-
-    trend_long_confirmation = pd.Series(True, index=df.index, dtype=bool)
-    trend_short_confirmation = pd.Series(True, index=df.index, dtype=bool)
-    if params.get("use_trend_filter", False):
-        trend_window = max(int(params.get("trend_window", 60)), 2)
-        trend_slope_window = max(int(params.get("trend_slope_window", 3)), 1)
-        trend_ma = sma(df["close"], trend_window)
-        trend_long_confirmation = ((df["close"] > trend_ma) & (trend_ma > trend_ma.shift(trend_slope_window))).fillna(False)
-        trend_short_confirmation = ((df["close"] < trend_ma) & (trend_ma < trend_ma.shift(trend_slope_window))).fillna(False)
-
-    return_up_confirmation = pd.Series(True, index=df.index, dtype=bool)
-    return_down_confirmation = pd.Series(True, index=df.index, dtype=bool)
-    if params.get("use_return_filter", False):
-        min_breakout_return = float(params.get("min_breakout_return", 0.0))
-        daily_return = df["close"].pct_change()
-        return_up_confirmation = (daily_return >= min_breakout_return).fillna(False)
-        return_down_confirmation = (daily_return <= -min_breakout_return).fillna(False)
+    filter_context = build_common_filter_context(
+        df=df,
+        params=params,
+        prices=df["close"],
+    )
 
     long_signal = (
         breakout_up
-        & volume_confirmation
-        & trend_long_confirmation
-        & return_up_confirmation
+        & filter_context["volume_confirmation"]
+        & filter_context["trend_long_confirmation"]
+        & filter_context["supertrend_long_confirmation"]
+        & filter_context["return_up_confirmation"]
     )
     short_signal = (
         breakout_down
-        & volume_confirmation
-        & trend_short_confirmation
-        & return_down_confirmation
+        & filter_context["volume_confirmation"]
+        & filter_context["trend_short_confirmation"]
+        & filter_context["supertrend_short_confirmation"]
+        & filter_context["return_down_confirmation"]
     )
 
     if breakout_direction == "up":
@@ -99,11 +79,14 @@ def build_rsrs_breakout_condition(df, params):
             "breakout_down": breakout_down,
             "breakout_valid": breakout_valid,
             "event_direction": event_direction,
-            "volume_confirmation": volume_confirmation,
-            "trend_long_confirmation": trend_long_confirmation,
-            "trend_short_confirmation": trend_short_confirmation,
-            "return_up_confirmation": return_up_confirmation,
-            "return_down_confirmation": return_down_confirmation,
+            "volume_confirmation": filter_context["volume_confirmation"],
+            "trend_long_confirmation": filter_context["trend_long_confirmation"],
+            "trend_short_confirmation": filter_context["trend_short_confirmation"],
+            "supertrend_long_confirmation": filter_context["supertrend_long_confirmation"],
+            "supertrend_short_confirmation": filter_context["supertrend_short_confirmation"],
+            "band_expansion_confirmation": filter_context["band_expansion_confirmation"],
+            "return_up_confirmation": filter_context["return_up_confirmation"],
+            "return_down_confirmation": filter_context["return_down_confirmation"],
             "condition": breakout_valid,
         },
         index=df.index,

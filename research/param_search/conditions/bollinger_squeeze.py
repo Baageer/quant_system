@@ -1,7 +1,11 @@
 import numpy as np
 import pandas as pd
 
-from signals.indicators import bollinger_bands, sma, supertrend
+from research.param_search.conditions.filters import (
+    build_common_filter_context,
+    direction_filters_ok,
+)
+from signals.indicators import bollinger_bands
 
 
 def _is_missing(value):
@@ -34,54 +38,14 @@ def _prepare_bollinger_context(df, params):
     breakout_max_wait = max(int(params.get("breakout_max_wait", 10)), 1)
     breakout_confirm_bars = max(int(params.get("breakout_confirm_bars", 1)), 1)
 
-    volume_confirmation = pd.Series(True, index=df.index, dtype=bool)
-    if params.get("use_volume_filter", False):
-        if "volume" not in df.columns:
-            raise ValueError("volume column is required when use_volume_filter=True")
-        volume_window = int(params.get("volume_window", 20))
-        volume_multiplier = float(params.get("volume_multiplier", 1.5))
-        volume_ma = sma(df["volume"], volume_window)
-        volume_confirmation = ((df["volume"] >= volume_ma * volume_multiplier) & (df["volume"] > df["volume"].shift(1))).fillna(False)
+    filter_context = build_common_filter_context(
+        df=df,
+        params=params,
+        prices=prices,
+        bandwidth=bandwidth,
+    )
 
-    trend_long_confirmation = pd.Series(True, index=df.index, dtype=bool)
-    trend_short_confirmation = pd.Series(True, index=df.index, dtype=bool)
-    if params.get("use_trend_filter", False):
-        trend_window = int(params.get("trend_window", 60))
-        trend_slope_window = int(params.get("trend_slope_window", 3))
-        trend_ma = sma(prices, trend_window)
-        trend_long_confirmation = ((prices > trend_ma) & (trend_ma > trend_ma.shift(trend_slope_window))).fillna(False)
-        trend_short_confirmation = ((prices < trend_ma) & (trend_ma < trend_ma.shift(trend_slope_window))).fillna(False)
-
-    supertrend_long_confirmation = pd.Series(True, index=df.index, dtype=bool)
-    supertrend_short_confirmation = pd.Series(True, index=df.index, dtype=bool)
-    if params.get("use_supertrend_filter", False):
-        required_columns = {"high", "low", "close"}
-        if not required_columns.issubset(df.columns):
-            raise ValueError("high, low, close columns are required when use_supertrend_filter=True")
-        _, trend_direction = supertrend(
-            df["high"],
-            df["low"],
-            prices,
-            atr_period=int(params.get("supertrend_atr_period", 10)),
-            multiplier=float(params.get("supertrend_multiplier", 3.0)),
-        )
-        supertrend_long_confirmation = (trend_direction > 0).fillna(False)
-        supertrend_short_confirmation = (trend_direction < 0).fillna(False)
-
-    band_expansion_confirmation = pd.Series(True, index=df.index, dtype=bool)
-    if params.get("use_band_expansion_filter", False):
-        band_expansion_lookback = max(int(params.get("band_expansion_lookback", 1)), 1)
-        band_expansion_confirmation = (bandwidth > bandwidth.shift(band_expansion_lookback)).fillna(False)
-
-    return_up_confirmation = pd.Series(True, index=df.index, dtype=bool)
-    return_down_confirmation = pd.Series(True, index=df.index, dtype=bool)
-    if params.get("use_return_filter", False):
-        min_breakout_return = float(params.get("min_breakout_return", 0.0))
-        daily_return = prices.pct_change()
-        return_up_confirmation = (daily_return >= min_breakout_return).fillna(False)
-        return_down_confirmation = (daily_return <= -min_breakout_return).fillna(False)
-
-    return {
+    context = {
         "prices": prices,
         "upper_band": upper_band,
         "middle_band": middle_band,
@@ -94,15 +58,9 @@ def _prepare_bollinger_context(df, params):
         "breakout_buffer": breakout_buffer,
         "breakout_max_wait": breakout_max_wait,
         "breakout_confirm_bars": breakout_confirm_bars,
-        "volume_confirmation": volume_confirmation,
-        "trend_long_confirmation": trend_long_confirmation,
-        "trend_short_confirmation": trend_short_confirmation,
-        "supertrend_long_confirmation": supertrend_long_confirmation,
-        "supertrend_short_confirmation": supertrend_short_confirmation,
-        "band_expansion_confirmation": band_expansion_confirmation,
-        "return_up_confirmation": return_up_confirmation,
-        "return_down_confirmation": return_down_confirmation,
     }
+    context.update(filter_context)
+    return context
 
 
 def _build_result_frame(
@@ -191,20 +149,8 @@ def build_bollinger_squeeze_condition(df, params):
             breakout_up.iloc[i] = up_streak >= context["breakout_confirm_bars"]
             breakout_down.iloc[i] = down_streak >= context["breakout_confirm_bars"]
 
-            long_filters_ok = (
-                context["volume_confirmation"].iloc[i]
-                and context["trend_long_confirmation"].iloc[i]
-                and context["supertrend_long_confirmation"].iloc[i]
-                and context["band_expansion_confirmation"].iloc[i]
-                and context["return_up_confirmation"].iloc[i]
-            )
-            short_filters_ok = (
-                context["volume_confirmation"].iloc[i]
-                and context["trend_short_confirmation"].iloc[i]
-                and context["supertrend_short_confirmation"].iloc[i]
-                and context["band_expansion_confirmation"].iloc[i]
-                and context["return_down_confirmation"].iloc[i]
-            )
+            long_filters_ok = direction_filters_ok(context, i, "up")
+            short_filters_ok = direction_filters_ok(context, i, "down")
 
             if context["breakout_direction"] in {"up", "both"} and breakout_up.iloc[i] and long_filters_ok:
                 breakout_valid.iloc[i] = True
@@ -353,20 +299,8 @@ def build_bollinger_squeeze_pullback_condition(df, params):
         breakout_up.iloc[i] = up_streak >= context["breakout_confirm_bars"]
         breakout_down.iloc[i] = down_streak >= context["breakout_confirm_bars"]
 
-        long_filters_ok = (
-            context["volume_confirmation"].iloc[i]
-            and context["trend_long_confirmation"].iloc[i]
-            and context["supertrend_long_confirmation"].iloc[i]
-            and context["band_expansion_confirmation"].iloc[i]
-            and context["return_up_confirmation"].iloc[i]
-        )
-        short_filters_ok = (
-            context["volume_confirmation"].iloc[i]
-            and context["trend_short_confirmation"].iloc[i]
-            and context["supertrend_short_confirmation"].iloc[i]
-            and context["band_expansion_confirmation"].iloc[i]
-            and context["return_down_confirmation"].iloc[i]
-        )
+        long_filters_ok = direction_filters_ok(context, i, "up")
+        short_filters_ok = direction_filters_ok(context, i, "down")
 
         if context["breakout_direction"] in {"up", "both"} and breakout_up.iloc[i] and long_filters_ok:
             breakout_valid.iloc[i] = True

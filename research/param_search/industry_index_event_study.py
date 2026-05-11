@@ -41,13 +41,14 @@ from research.param_search.conditions.registry import (  # noqa: E402
     BASE_CONDITION_PARAMS_MAP,
     CONDITION_PARAM_GRID_MAP,
     build_condition_frame,
+    build_condition_params,
 )
 from signals.indicators import obv, sma  # noqa: E402
 
 
 CONDITION_NAME = "bollinger_squeeze"  # bollinger_squeeze | bollinger_squeeze_pullback | rsrs_breakout
-START_DATE = "2025-01-01"
-END_DATE = "2026-04-27"
+START_DATE = "2020-01-01"
+END_DATE = "2025-12-31"
 
 INDEX_LIST_FILE = PROJECT_ROOT / "data" / "raw" / "akshare" / "industry_sector_index_list.csv"
 INDEX_DATA_DIR = PROJECT_ROOT / "data" / "raw" / "akshare" / "industry_sector_index"
@@ -90,7 +91,7 @@ if CONDITION_NAME not in BASE_CONDITION_PARAMS_MAP:
     supported = ", ".join(sorted(BASE_CONDITION_PARAMS_MAP.keys()))
     raise ValueError(f"Unsupported CONDITION_NAME: {CONDITION_NAME}. Available: {supported}")
 
-BASE_CONDITION_PARAMS = dict(BASE_CONDITION_PARAMS_MAP[CONDITION_NAME])
+BASE_CONDITION_PARAMS = build_condition_params(CONDITION_NAME)
 CONDITION_PARAM_GRID = dict(CONDITION_PARAM_GRID_MAP.get(CONDITION_NAME, {}))
 
 

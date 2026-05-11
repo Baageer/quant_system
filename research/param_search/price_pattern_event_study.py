@@ -59,6 +59,7 @@ from research.param_search.conditions.registry import (
     BASE_CONDITION_PARAMS_MAP,
     CONDITION_PARAM_GRID_MAP,
     build_condition_frame,
+    build_condition_params,
 )
 
 CONDITION_NAME = "rsrs_breakout"  # bollinger_squeeze | bollinger_squeeze_pullback | rsrs_breakout
@@ -94,7 +95,7 @@ if CONDITION_NAME not in BASE_CONDITION_PARAMS_MAP:
     supported = ", ".join(sorted(BASE_CONDITION_PARAMS_MAP.keys()))
     raise ValueError(f"Unsupported CONDITION_NAME: {CONDITION_NAME}. Available: {supported}")
 
-BASE_CONDITION_PARAMS = dict(BASE_CONDITION_PARAMS_MAP[CONDITION_NAME])
+BASE_CONDITION_PARAMS = build_condition_params(CONDITION_NAME)
 CONDITION_PARAM_GRID = dict(CONDITION_PARAM_GRID_MAP.get(CONDITION_NAME, {}))
 
 

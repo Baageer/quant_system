@@ -27,6 +27,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from research.param_search.conditions.registry import (  # noqa: E402
     BASE_CONDITION_PARAMS_MAP,
     build_condition_frame,
+    build_condition_params,
 )
 
 
@@ -553,7 +554,7 @@ def run_once(args):
     monitor_df, skip_df = build_monitor_rows(
         universe_df=universe_df,
         condition_name=args.condition_name,
-        condition_params=dict(BASE_CONDITION_PARAMS_MAP[args.condition_name]),
+        condition_params=build_condition_params(args.condition_name),
         run_label=run_label,
         snapshot_time=snapshot_time,
     )
