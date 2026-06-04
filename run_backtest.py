@@ -333,6 +333,7 @@ def run_backtest(
     initial_capital: float = None,
     trade_amount: float = None,
     adjust_mode: Optional[str] = None,
+    raw_price_adjust: Optional[str] = None,
     enable_stop_loss: bool = True,
     enable_stop_profit: bool = True,
     signal_combination: str = "weighted",
@@ -385,6 +386,8 @@ def run_backtest(
         stock_file = config["data"].get("stock_file", "./data/test1.txt")
     if adjust_mode is None:
         adjust_mode = config["data"].get("adjust_mode", "hfq")
+    if raw_price_adjust is None:
+        raw_price_adjust = config["data"].get("raw_price_adjust", "")
     if industry_index_list_file is None:
         industry_index_list_file = config["data"].get(
             "industry_index_list_file",
@@ -478,8 +481,10 @@ def run_backtest(
             cache_dir=config["data"]["cache_dir"],
             processed_dir=config["data"]["processed_dir"],
             adjust_mode=adjust_mode,
+            raw_price_adjust=raw_price_adjust,
         )
         symbols = data_api.get_stock_list()
+        # symbols = symbols[440:]
         if stock_max_number != -1 and len(symbols) > stock_max_number:
             symbols = symbols[:stock_max_number]
         logger.info(f"Stock count: {len(symbols)}")
@@ -765,6 +770,12 @@ def main():
         help="Price adjust mode override: hfq, qfq, or none",
     )
     parser.add_argument(
+        "--raw-price-adjust",
+        type=str,
+        default=None,
+        help="When adjust_mode is raw, rebuild prices from pct_change as qfq or hfq",
+    )
+    parser.add_argument(
         "--signal-combination",
         type=str,
         default="weighted",
@@ -850,6 +861,7 @@ def main():
         initial_capital=args.capital,
         trade_amount=args.trade_amount,
         adjust_mode=args.adjust_mode,
+        raw_price_adjust=args.raw_price_adjust,
         enable_stop_loss=not args.no_stop_loss,
         enable_stop_profit=not args.no_stop_profit,
         signal_combination=args.signal_combination,

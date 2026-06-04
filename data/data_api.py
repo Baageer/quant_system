@@ -55,13 +55,19 @@ class DataAPI:
         cache_dir: str = "./data/raw",
         processed_dir: str = "./data/processed",
         adjust_mode: Optional[str] = "hfq",
+        raw_price_adjust: Optional[str] = None,
     ):
         self.cache_dir = cache_dir
         self.processed_dir = processed_dir
         self.stock_file = stock_file
         self.source = str(source).strip().lower()
         self.adjust_mode = self._normalize_adjust_mode(adjust_mode)
-        self.adjust_mode_label = self.adjust_mode or "raw"
+        self.raw_price_adjust = self._normalize_raw_price_adjust(raw_price_adjust)
+        if self.adjust_mode and self.raw_price_adjust:
+            raise ValueError(
+                "raw_price_adjust can only be used when adjust_mode is raw or none."
+            )
+        self.adjust_mode_label = self._build_adjust_mode_label()
         self.pro = None
 
         if self.source not in {"akshare", "tushare"}:
@@ -105,6 +111,29 @@ class DataAPI:
         raise ValueError(
             f"Unsupported adjust_mode: {adjust_mode}. Expected one of hfq, qfq, none."
         )
+
+    @staticmethod
+    def _normalize_raw_price_adjust(raw_price_adjust: Optional[str]) -> str:
+        if raw_price_adjust is None:
+            return ""
+
+        normalized = str(raw_price_adjust).strip().lower()
+        if normalized in {"", "none", "raw"}:
+            return ""
+        if normalized in {"qfq", "hfq"}:
+            return normalized
+
+        raise ValueError(
+            "Unsupported raw_price_adjust: "
+            f"{raw_price_adjust}. Expected one of qfq, hfq, none."
+        )
+
+    def _build_adjust_mode_label(self) -> str:
+        if self.adjust_mode:
+            return self.adjust_mode
+        if self.raw_price_adjust:
+            return f"raw_{self.raw_price_adjust}_pct"
+        return "raw"
 
     @staticmethod
     def _normalize_date(date_value: str) -> str:
@@ -247,6 +276,61 @@ class DataAPI:
             df["amplitude"] = (df["high"] - df["low"]) / previous_close * 100.0
 
         df = df[list(self.STANDARD_PRICE_COLUMNS)].sort_values("date").reset_index(drop=True)
+        df = self._apply_raw_price_adjustment(df)
+        return df
+
+    def _apply_raw_price_adjustment(self, data: pd.DataFrame) -> pd.DataFrame:
+        if self.adjust_mode or not self.raw_price_adjust or data is None or data.empty:
+            return data
+
+        df = data.copy()
+        raw_close = pd.to_numeric(df["close"], errors="coerce")
+        valid_close = raw_close.where(raw_close > 0)
+        if valid_close.notnull().sum() < 2:
+            return df
+
+        pct_change = pd.to_numeric(df["pct_change"], errors="coerce") / 100.0
+        fallback_returns = raw_close.pct_change()
+        returns = pct_change.where(pct_change.notnull(), fallback_returns)
+
+        growth = 1.0 + returns
+        if not growth.empty:
+            growth.iloc[0] = 1.0
+
+        fallback_growth = raw_close / raw_close.shift(1)
+        growth = growth.where(growth.notnull(), fallback_growth)
+        growth = growth.where(growth > 0)
+
+        if growth.notnull().sum() < 2:
+            return df
+
+        first_valid_index = valid_close.first_valid_index()
+        last_valid_index = valid_close.last_valid_index()
+        if first_valid_index is None or last_valid_index is None:
+            return df
+
+        cumulative_factor = growth.cumprod()
+        if self.raw_price_adjust == "hfq":
+            anchor_index = first_valid_index
+        else:
+            anchor_index = last_valid_index
+
+        anchor_close = valid_close.loc[anchor_index]
+        anchor_factor = cumulative_factor.loc[anchor_index]
+        if self._is_missing(anchor_close) or self._is_missing(anchor_factor) or anchor_factor == 0:
+            return df
+
+        adjusted_close = cumulative_factor * (anchor_close / anchor_factor)
+        price_factor = adjusted_close / raw_close.where(raw_close > 0)
+
+        for column in self._RAW_PRICE_COLUMNS:
+            df[column] = pd.to_numeric(df[column], errors="coerce") * price_factor
+
+        previous_close = df["close"].shift(1)
+        previous_close = previous_close.where(previous_close != 0, float("nan"))
+        df["change"] = df["close"].diff()
+        df["pct_change"] = (df["close"] / previous_close - 1.0) * 100.0
+        df["amplitude"] = (df["high"] - df["low"]) / previous_close * 100.0
         return df
 
     def _filter_date_window(self, data: pd.DataFrame, start_date: str, end_date: str) -> pd.DataFrame:

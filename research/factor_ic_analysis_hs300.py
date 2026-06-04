@@ -253,12 +253,12 @@ def build_selection_view(ic_summary: pd.DataFrame) -> pd.DataFrame:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run single-factor Rank IC analysis for HS300.")
-    parser.add_argument("--stock-file", default="data/HS300.txt")
-    parser.add_argument("--cache-dir", default="data/raw/tushare/price_history/qfq")
-    parser.add_argument("--start", default="2020-01-01")
+    parser.add_argument("--stock-file", default="data/ZZ_500.txt")
+    parser.add_argument("--cache-dir", default="data/raw/tushare/price_history/hfq")
+    parser.add_argument("--start", default="2018-01-01")
     parser.add_argument("--end", default="2024-12-31")
     parser.add_argument("--factors", default="all", help="Comma-separated factor names or all.")
-    parser.add_argument("--forward-horizons", default="1,3,5,10,20")
+    parser.add_argument("--forward-horizons", default="5,10,20")
     parser.add_argument("--min-obs", type=int, default=30, help="Minimum stocks required for one daily cross-section.")
     parser.add_argument("--rolling-window", type=int, default=60, help="Trading-day window for rolling IC.")
     parser.add_argument("--winsorize", action="store_true", help="Apply cross-sectional factor winsorization before IC.")

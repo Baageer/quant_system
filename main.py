@@ -31,6 +31,7 @@ def main():
         cache_dir=config['data']['cache_dir'],
         processed_dir=config['data']['processed_dir'],
         adjust_mode=config['data'].get('adjust_mode', 'hfq'),
+        raw_price_adjust=config['data'].get('raw_price_adjust', ''),
     )
     logger.info("数据接口初始化完成")
     
