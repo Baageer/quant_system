@@ -6,6 +6,8 @@ panel, and exports data-quality reports to output/.
 """
 import argparse
 import json
+import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -46,6 +48,22 @@ def progress_iter(iterable, desc: str, total: Optional[int] = None, enabled: boo
     if not enabled or tqdm is None:
         return iterable
     return tqdm(iterable, desc=desc, total=total, unit="item")
+
+
+def _resolve_worker_count(max_workers: int, task_count: int) -> int:
+    if task_count <= 1:
+        return 1
+    if max_workers <= 0:
+        return max(1, min(os.cpu_count() or 1, task_count))
+    return max(1, min(max_workers, task_count))
+
+
+def _calculate_symbol_factor_frame(task: Tuple[str, pd.DataFrame, Tuple[str, ...]]) -> pd.DataFrame:
+    symbol, data, factor_names = task
+    factors = calculate_single_stock_factors(data, factor_names=factor_names, include_ohlcv=False)
+    factors["symbol"] = str(symbol)
+    factors["date"] = factors.index
+    return factors.set_index(["date", "symbol"])
 
 
 def read_symbols(path: Path) -> List[str]:
@@ -187,14 +205,30 @@ def build_factor_panel_with_progress(
     stock_data: Dict[str, pd.DataFrame],
     factor_names: List[str],
     show_progress: bool = True,
+    max_workers: int = 1,
 ) -> pd.DataFrame:
     frames = []
     items = sorted(stock_data.items())
-    for symbol, data in progress_iter(items, "Calculating factors", total=len(items), enabled=show_progress):
-        factors = calculate_single_stock_factors(data, factor_names=factor_names, include_ohlcv=False)
-        factors["symbol"] = str(symbol)
-        factors["date"] = factors.index
-        frames.append(factors.set_index(["date", "symbol"]))
+    worker_count = _resolve_worker_count(max_workers, len(items))
+    tasks = [(symbol, data, tuple(factor_names)) for symbol, data in items]
+
+    if worker_count == 1:
+        frame_iter = (_calculate_symbol_factor_frame(task) for task in tasks)
+        for frame in progress_iter(frame_iter, "Calculating factors", total=len(items), enabled=show_progress):
+            frames.append(frame)
+    else:
+        with ProcessPoolExecutor(max_workers=worker_count) as executor:
+            future_to_symbol = {
+                executor.submit(_calculate_symbol_factor_frame, task): task[0]
+                for task in tasks
+            }
+            completed_futures = as_completed(future_to_symbol)
+            for future in progress_iter(completed_futures, "Calculating factors", total=len(items), enabled=show_progress):
+                symbol = future_to_symbol[future]
+                try:
+                    frames.append(future.result())
+                except Exception as exc:
+                    raise RuntimeError(f"{symbol}: factor calculation failed") from exc
 
     if not frames:
         return pd.DataFrame(index=pd.MultiIndex.from_arrays([[], []], names=["date", "symbol"]))
@@ -456,6 +490,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--extreme-abs-threshold", type=float, default=1e6)
     parser.add_argument("--factors", default="all", help="Comma-separated factor names or all.")
     parser.add_argument("--forward-horizons", default="1,3,5,10,20")
+    parser.add_argument(
+        "--factor-workers",
+        type=int,
+        default=0,
+        help="Factor calculation worker processes. Use 0 for auto, 1 for serial.",
+    )
     parser.add_argument("--no-progress", action="store_true", help="Disable tqdm progress bars.")
     return parser.parse_args()
 
@@ -484,11 +524,13 @@ def main() -> None:
     )
     log_step(f"Loaded {len(stock_data)} symbols with price rows")
 
-    log_step(f"Building factor panel with {len(factor_names)} factors")
+    factor_worker_count = _resolve_worker_count(args.factor_workers, len(stock_data))
+    log_step(f"Building factor panel with {len(factor_names)} factors using {factor_worker_count} worker(s)")
     panel = build_factor_panel_with_progress(
         stock_data,
         factor_names=factor_names,
         show_progress=show_progress,
+        max_workers=args.factor_workers,
     )
     log_step(f"Factor panel rows: {len(panel)}")
 
