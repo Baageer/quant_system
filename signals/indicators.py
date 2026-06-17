@@ -429,6 +429,42 @@ def vwap(
     return (tp * volume).cumsum() / volume.cumsum()
 
 
+def vwap_distance(
+    high: pd.Series,
+    low: pd.Series,
+    close: pd.Series,
+    volume: pd.Series,
+    window: int = 20
+) -> pd.Series:
+    """
+    VWAP 距离指标
+    
+    计算价格相对于滚动 VWAP 的偏离度，用于识别价格偏离成交均价的程度
+    
+    参数:
+        high: 最高价序列
+        low: 最低价序列
+        close: 收盘价序列
+        volume: 成交量序列
+        window: VWAP 计算窗口，默认20
+    
+    返回:
+        VWAP 距离序列（正值表示价格高于 VWAP，负值表示价格低于 VWAP）
+    """
+    tp = (high + low + close) / 3
+    
+    # 计算滚动 VWAP
+    rolling_tp_volume_sum = (tp * volume).rolling(window=window, min_periods=window).sum()
+    rolling_volume_sum = volume.rolling(window=window, min_periods=window).sum()
+    
+    rolling_vwap = rolling_tp_volume_sum / rolling_volume_sum
+    
+    # 计算距离（百分比）
+    distance = (close - rolling_vwap) / rolling_vwap
+    
+    return distance
+
+
 def donchian_channel(
     high: pd.Series,
     low: pd.Series,

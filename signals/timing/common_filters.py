@@ -121,6 +121,110 @@ def apply_common_timing_filters(
     return filtered
 
 
+def apply_trend_filter(
+    data: pd.DataFrame,
+    signal: pd.Series,
+    window: int = 60,
+    slope_window: int = 3,
+    price_col: str = "close",
+) -> pd.Series:
+    """
+    应用趋势过滤
+
+    仅在价格位于趋势线上方且趋势向上时允许做多，反之允许做空
+
+    参数:
+        data: 包含价格数据的DataFrame
+        signal: 原始信号序列
+        window: 趋势均线窗口
+        slope_window: 趋势斜率窗口
+        price_col: 价格列名
+
+    返回:
+        过滤后的信号序列
+    """
+    prices = data[price_col]
+    trend_ma = sma(prices, window)
+    trend_rising = trend_ma > trend_ma.shift(slope_window)
+    trend_falling = trend_ma < trend_ma.shift(slope_window)
+
+    allow_long = ((prices > trend_ma) & trend_rising).fillna(False)
+    allow_short = ((prices < trend_ma) & trend_falling).fillna(False)
+
+    filtered = pd.Series(0, index=data.index, dtype=int)
+    current_pos = 0
+
+    for i in range(len(data)):
+        target_pos = int(signal.iloc[i])
+
+        if target_pos == current_pos:
+            filtered.iloc[i] = current_pos
+            continue
+
+        if target_pos == 0:
+            current_pos = 0
+        elif target_pos > 0:
+            if allow_long.iloc[i]:
+                current_pos = 1
+        else:
+            if allow_short.iloc[i]:
+                current_pos = -1
+
+        filtered.iloc[i] = current_pos
+
+    return filtered
+
+
+def apply_volume_filter(
+    data: pd.DataFrame,
+    signal: pd.Series,
+    window: int = 20,
+    multiplier: float = 1.2,
+    volume_col: str = "volume",
+) -> pd.Series:
+    """
+    应用成交量过滤
+
+    仅在成交量高于均线且放大时允许交易
+
+    参数:
+        data: 包含成交量数据的DataFrame
+        signal: 原始信号序列
+        window: 成交量均线窗口
+        multiplier: 成交量倍数
+        volume_col: 成交量列名
+
+    返回:
+        过滤后的信号序列
+    """
+    volume = data[volume_col]
+    volume_ma = sma(volume, window)
+
+    volume_ok = (
+        (volume > volume_ma * multiplier) & (volume > volume.shift(1))
+    ).fillna(False)
+
+    filtered = pd.Series(0, index=data.index, dtype=int)
+    current_pos = 0
+
+    for i in range(len(data)):
+        target_pos = int(signal.iloc[i])
+
+        if target_pos == current_pos:
+            filtered.iloc[i] = current_pos
+            continue
+
+        if target_pos == 0:
+            current_pos = 0
+        elif target_pos != 0:
+            if volume_ok.iloc[i]:
+                current_pos = target_pos
+
+        filtered.iloc[i] = current_pos
+
+    return filtered
+
+
 class FilteredTimingStrategy:
     """
     Strategy proxy that applies common timing filters outside strategy logic.

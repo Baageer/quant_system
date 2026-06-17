@@ -228,6 +228,43 @@ timing_strategies:
     min_data_length: 20
     description: "Volume-price divergence signal."
 
+  vwap_distance:
+    name: "VWAP Distance Strategy"
+    module: "signals.timing.vwap_distance"
+    class: "VWAPDistanceStrategy"
+    params:
+      window: 20
+      threshold: 0.01
+      use_negative: true
+      use_trend_filter: false
+      trend_window: 60
+      trend_slope_window: 3
+      use_volume_filter: false
+      volume_window: 20
+      volume_multiplier: 1.2
+    min_data_length: 25
+    description: "VWAP distance strategy with negative direction (lower VWAP distance = higher expected return)."
+
+  rsrs_beta:
+    name: "RSRS Beta Strategy"
+    module: "signals.timing.rsrs_beta"
+    class: "RSRSBetaStrategy"
+    params:
+      window: 20
+      zscore_window: 90
+      min_valid_window: 12
+      entry_zscore: 0.25
+      exit_zscore: 0.0
+      use_negative: true
+      use_trend_filter: false
+      trend_window: 60
+      trend_slope_window: 3
+      use_volume_filter: false
+      volume_window: 20
+      volume_multiplier: 1.5
+    min_data_length: 140
+    description: "RSRS beta strategy with negative direction (lower beta = higher expected return)."
+
 stop_strategies:
   stop_loss:
     name: "Stop Loss Strategy"

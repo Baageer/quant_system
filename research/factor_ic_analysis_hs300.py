@@ -674,6 +674,140 @@ def calculate_monotonicity_summary(quantile_summary: pd.DataFrame) -> pd.DataFra
     return pd.DataFrame(rows, columns=columns).sort_values(["horizon", "group_count", "net_monotonic_spearman"], ascending=[True, True, False])
 
 
+def calculate_factor_correlation(
+    factor_panel: pd.DataFrame,
+    factor_names: List[str],
+    min_obs: int = 30,
+    show_progress: bool = True,
+) -> pd.DataFrame:
+    rows = []
+    dates = sorted(set(factor_panel.index.get_level_values("date")))
+    factor_pairs = [
+        (f1, f2)
+        for i, f1 in enumerate(factor_names)
+        for j, f2 in enumerate(factor_names)
+        if i < j
+    ]
+
+    for f1, f2 in progress_iter(factor_pairs, "Calculating factor correlations", total=len(factor_pairs), enabled=show_progress):
+        for date in dates:
+            try:
+                date_frame = factor_panel[[f1, f2]].xs(date, level="date")
+            except KeyError:
+                continue
+            sample = date_frame.replace([np.inf, -np.inf], np.nan).dropna()
+            if len(sample) < min_obs:
+                rows.append(
+                    {
+                        "date": date,
+                        "factor_1": f1,
+                        "factor_2": f2,
+                        "correlation": np.nan,
+                        "n_obs": int(len(date_frame.dropna())),
+                        "status": "insufficient",
+                    }
+                )
+                continue
+
+            corr = _spearman_corr(sample[f1], sample[f2])
+            rows.append(
+                {
+                    "date": date,
+                    "factor_1": f1,
+                    "factor_2": f2,
+                    "correlation": float(corr) if corr == corr else np.nan,
+                    "n_obs": int(len(sample)),
+                    "status": "ok" if corr == corr else "nan_corr",
+                }
+            )
+
+    result = pd.DataFrame(rows)
+    if result.empty:
+        return result
+    result["date"] = pd.to_datetime(result["date"])
+    return result.sort_values(["factor_1", "factor_2", "date"]).reset_index(drop=True)
+
+
+def summarize_factor_correlation(correlation_by_date: pd.DataFrame) -> pd.DataFrame:
+    columns = [
+        "factor_1",
+        "category_1",
+        "factor_2",
+        "category_2",
+        "corr_count",
+        "corr_mean",
+        "corr_std",
+        "corr_min",
+        "corr_25p",
+        "corr_median",
+        "corr_75p",
+        "corr_max",
+        "abs_corr_mean",
+        "t_value",
+        "valid_date_rate",
+        "is_highly_correlated",
+        "suggestion",
+    ]
+
+    if correlation_by_date.empty:
+        return pd.DataFrame(columns=columns)
+
+    rows = []
+    for (f1, f2), group in correlation_by_date.groupby(["factor_1", "factor_2"]):
+        values = group["correlation"].dropna()
+        corr_count = int(len(values))
+        corr_mean = float(values.mean()) if corr_count else np.nan
+        corr_std = float(values.std()) if corr_count > 1 else np.nan
+        t_value = corr_mean / (corr_std / math.sqrt(corr_count)) if corr_std == corr_std and corr_std != 0 and corr_count > 1 else np.nan
+        abs_corr_mean = abs(corr_mean) if corr_mean == corr_mean else np.nan
+
+        is_highly_correlated = bool(abs_corr_mean >= 0.5) if abs_corr_mean == abs_corr_mean else False
+        if is_highly_correlated:
+            suggestion = "redundant" if abs_corr_mean >= 0.7 else "watch"
+        else:
+            suggestion = "independent"
+
+        rows.append(
+            {
+                "factor_1": f1,
+                "category_1": AVAILABLE_FACTOR_SPECS[f1].category,
+                "factor_2": f2,
+                "category_2": AVAILABLE_FACTOR_SPECS[f2].category,
+                "corr_count": corr_count,
+                "corr_mean": corr_mean,
+                "corr_std": corr_std,
+                "corr_min": float(values.min()) if corr_count else np.nan,
+                "corr_25p": float(values.quantile(0.25)) if corr_count else np.nan,
+                "corr_median": float(values.median()) if corr_count else np.nan,
+                "corr_75p": float(values.quantile(0.75)) if corr_count else np.nan,
+                "corr_max": float(values.max()) if corr_count else np.nan,
+                "abs_corr_mean": abs_corr_mean,
+                "t_value": t_value,
+                "valid_date_rate": float(corr_count / len(group)) if len(group) else np.nan,
+                "is_highly_correlated": is_highly_correlated,
+                "suggestion": suggestion,
+            }
+        )
+
+    result = pd.DataFrame(rows, columns=columns)
+    return result.sort_values(["abs_corr_mean", "corr_count"], ascending=[False, False])
+
+
+def build_factor_correlation_matrix(corr_summary: pd.DataFrame) -> pd.DataFrame:
+    if corr_summary.empty:
+        return pd.DataFrame()
+
+    factor_names = sorted(set(corr_summary["factor_1"].tolist() + corr_summary["factor_2"].tolist()))
+    matrix = pd.DataFrame(index=factor_names, columns=factor_names, dtype=float)
+    np.fill_diagonal(matrix.values, 1.0)
+
+    for _, row in corr_summary.iterrows():
+        matrix.loc[row["factor_1"], row["factor_2"]] = row["corr_mean"]
+        matrix.loc[row["factor_2"], row["factor_1"]] = row["corr_mean"]
+
+    return matrix
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run single-factor Rank IC analysis for HS300.")
     parser.add_argument("--stock-file", default="data/ZZ_1000.txt")
@@ -752,6 +886,16 @@ def main() -> None:
     selection_view = build_selection_view(ic_summary)
     effective_mapping = build_effective_factor_mapping(selection_view)
 
+    log_step("Calculating factor correlation matrix")
+    correlation_by_date = calculate_factor_correlation(
+        factor_panel,
+        factor_names,
+        min_obs=args.min_obs,
+        show_progress=show_progress,
+    )
+    corr_summary = summarize_factor_correlation(correlation_by_date)
+    corr_matrix = build_factor_correlation_matrix(corr_summary)
+
     log_step(f"Running quantile backtest: groups={quantile_groups}, cost_bps={args.transaction_cost_bps}")
     quantile_returns, long_short_returns = calculate_quantile_backtest(
         factor_panel,
@@ -784,6 +928,9 @@ def main() -> None:
             "factor_rolling_ic.csv": rolling_ic,
             "factor_selection_view.csv": selection_view,
             "factor_effective_mapping.csv": effective_mapping,
+            "factor_correlation_by_date.csv": correlation_by_date,
+            "factor_correlation_summary.csv": corr_summary,
+            "factor_correlation_matrix.csv": corr_matrix,
             "factor_quantile_returns.csv": quantile_returns,
             "factor_quantile_summary.csv": quantile_summary,
             "factor_long_short_returns.csv": long_short_returns,
@@ -823,6 +970,13 @@ def main() -> None:
         "negative_effective_factors": effective_mapping[
             effective_mapping["effective_factor_multiplier"] == -1
         ].to_dict(orient="records"),
+        "highly_correlated_pairs": corr_summary[
+            corr_summary["is_highly_correlated"]
+        ].to_dict(orient="records"),
+        "redundant_pairs": corr_summary[
+            corr_summary["suggestion"] == "redundant"
+        ].to_dict(orient="records"),
+        "correlation_matrix": corr_matrix.to_dict(orient="index") if not corr_matrix.empty else {},
     }
     with open(output_dir / "ic_summary.json", "w", encoding="utf-8") as file_obj:
         json.dump(summary, file_obj, ensure_ascii=False, indent=2, default=str)
