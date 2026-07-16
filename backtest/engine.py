@@ -373,6 +373,7 @@ class BacktestEngine:
     ) -> Dict[str, Dict]:
         """
         Check whether current positions trigger stop exit signals.
+        Optimized to reduce redundant data access.
         
         Args:
             data: price data.
@@ -386,29 +387,45 @@ class BacktestEngine:
         if not self.positions:
             return stop_signals
         
+        # Cache current date data for all positions to avoid repeated df.loc calls
+        position_data = {}
         for symbol in list(self.positions.keys()):
             if symbol not in data or date not in data[symbol].index:
                 continue
             
             df = data[symbol]
-            current_price = df.loc[date, 'close']
-            current_high = df.loc[date, 'high'] if 'high' in df.columns else current_price
-            entry_price = self.position_entry_prices.get(symbol)
-            highest_price = self.position_high_prices.get(symbol, entry_price)
-            
+            row = df.loc[date]
+            position_data[symbol] = {
+                'df': df,
+                'close': row.get('close'),
+                'high': row.get('high') if 'high' in df.columns else row.get('close'),
+                'entry_price': self.position_entry_prices.get(symbol),
+                'highest_price': self.position_high_prices.get(symbol, self.position_entry_prices.get(symbol))
+            }
+        
+        # Process stop signals
+        for symbol, pos_data in position_data.items():
+            entry_price = pos_data['entry_price']
             if entry_price is None:
                 continue
 
+            current_price = pos_data['close']
+            current_high = pos_data['high']
+            df = pos_data['df']
+            
+            # Calculate holding days
             holding_days = self._get_holding_days(df, symbol, date)
             
-            self.position_high_prices[symbol] = max(highest_price, current_high)
+            # Update highest price
+            self.position_high_prices[symbol] = max(pos_data['highest_price'], current_high)
             
+            # Check stop loss
             if self.stop_loss_strategy:
                 stop_loss_atr = None
                 stop_loss_atr_col = self.stop_indicator_columns.get("stop_loss")
-                if stop_loss_atr_col:
+                if stop_loss_atr_col and stop_loss_atr_col in df.columns:
                     stop_loss_atr = df.loc[date, stop_loss_atr_col]
-                    if stop_loss_atr != stop_loss_atr:
+                    if stop_loss_atr != stop_loss_atr:  # Check for NaN
                         stop_loss_atr = None
 
                 self.stop_loss_strategy.set_position(entry_price)
@@ -435,12 +452,13 @@ class BacktestEngine:
                     }
                     continue
             
+            # Check stop profit
             if self.stop_profit_strategy:
                 stop_profit_atr = None
                 stop_profit_atr_col = self.stop_indicator_columns.get("stop_profit")
-                if stop_profit_atr_col:
+                if stop_profit_atr_col and stop_profit_atr_col in df.columns:
                     stop_profit_atr = df.loc[date, stop_profit_atr_col]
-                    if stop_profit_atr != stop_profit_atr:
+                    if stop_profit_atr != stop_profit_atr:  # Check for NaN
                         stop_profit_atr = None
 
                 self.stop_profit_strategy.set_position(entry_price)
@@ -469,16 +487,52 @@ class BacktestEngine:
         
         return stop_signals
     
+    def _build_optimized_data_structures(self, data: Dict[str, pd.DataFrame]) -> tuple:
+        """
+        Build optimized data structures for faster access during backtest.
+        
+        Returns:
+            tuple: (date_to_symbols, price_matrix, signal_matrix)
+        """
+        # Build date to symbols mapping
+        date_to_symbols = {}
+        for symbol, df in data.items():
+            for date in df.index:
+                if date not in date_to_symbols:
+                    date_to_symbols[date] = []
+                date_to_symbols[date].append(symbol)
+        
+        # Build price matrix for fast price lookup
+        price_dict = {}
+        for symbol, df in data.items():
+            price_dict[symbol] = df['close']
+        
+        price_matrix = pd.DataFrame(price_dict)
+        
+        # Build signal matrix if signals exist
+        signal_dict = {}
+        for symbol, df in data.items():
+            if 'signal' in df.columns:
+                signal_dict[symbol] = df['signal']
+        
+        signal_matrix = pd.DataFrame(signal_dict) if signal_dict else None
+        
+        return date_to_symbols, price_matrix, signal_matrix
+    
     def run(
         self,
         data: Dict[str, pd.DataFrame],
         strategy_func: Callable,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
-        show_progress: bool = True
+        show_progress: bool = True,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
     ) -> pd.DataFrame:
-        """Run backtest."""
+        """Run backtest with optimized data structures."""
         self._prepare_stop_indicators(data)
+        
+        # Build optimized data structures
+        date_to_symbols, price_matrix, signal_matrix = self._build_optimized_data_structures(data)
 
         all_dates = sorted(set(
             date for df in data.values() 
@@ -492,14 +546,17 @@ class BacktestEngine:
         
         total_days = len(all_dates)
         date_iterator = tqdm(all_dates, desc="Backtest progress", unit="day", disable=not show_progress)
+        if progress_callback is not None:
+            progress_callback(0, total_days, "Starting backtest...")
         
         time_dic = {"prices":0, "signals":0, "stop_check":0, "trades":0, "portfolio":0, "daily_values":0}
-        for date in date_iterator:
+        for day_index, date in enumerate(date_iterator, 1):
+            # Optimized price retrieval using pre-built matrix
             start_time = time()
-            prices = {}
-            for symbol, df in data.items():
-                if date in df.index:
-                    prices[symbol] = df.loc[date, 'close']
+            if date in price_matrix.index:
+                prices = price_matrix.loc[date].dropna().to_dict()
+            else:
+                prices = {}
             time_dic["prices"] += time() - start_time
             
             start_time = time()
@@ -507,7 +564,9 @@ class BacktestEngine:
             time_dic["stop_check"] += time() - start_time
             
             start_time = time()
-            signals = strategy_func(date, data, self.positions)
+            # Optimize strategy function call by filtering relevant data
+            relevant_data = {symbol: data[symbol] for symbol in date_to_symbols.get(date, [])}
+            signals = strategy_func(date, relevant_data, self.positions)
             time_dic["signals"] += time() - start_time
             
             start_time = time()
@@ -532,6 +591,12 @@ class BacktestEngine:
                     "value": f"{portfolio_value:,.0f}",
                     "positions": len(self.positions),
                 })
+            if progress_callback is not None:
+                progress_callback(
+                    day_index,
+                    total_days,
+                    f"{date.strftime('%Y-%m-%d')} | value={portfolio_value:,.0f} | positions={len(self.positions)}",
+                )
         
         print(time_dic)
         return pd.DataFrame(self.daily_values).set_index('date')
@@ -544,7 +609,7 @@ class BacktestEngine:
         date: datetime
     ):
         """Execute generated trades."""
-        for symbol, signal in signals.items():
+        for symbol, signal in sorted(signals.items()):
             if symbol not in prices:
                 continue
             
@@ -709,5 +774,4 @@ class BacktestEngine:
     def get_trades(self) -> pd.DataFrame:
         """Return all executed trades as a DataFrame."""
         return pd.DataFrame(self.trades)
-
 

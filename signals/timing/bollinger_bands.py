@@ -3,7 +3,7 @@
 """
 import numpy as np
 import pandas as pd
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 from signals.indicators import bollinger_bands, sma, supertrend
 
@@ -63,6 +63,37 @@ def _apply_signal_delay(signal: pd.Series, signal_delay: int) -> pd.Series:
     return signal.shift(signal_delay).fillna(0).astype(int)
 
 
+def _infer_cache_symbol(data: pd.DataFrame, cache_symbol: Optional[str]) -> str:
+    if cache_symbol:
+        return str(cache_symbol)
+    if "code" in data.columns:
+        codes = data["code"].dropna().astype(str).unique()
+        if len(codes) == 1:
+            return codes[0]
+    return "unknown"
+
+
+def _get_bollinger_bands(
+    data: pd.DataFrame,
+    window: int,
+    num_std: float,
+    price_col: str,
+    indicator_cache: Optional[Any] = None,
+    cache_symbol: Optional[str] = None,
+) -> Tuple[pd.Series, pd.Series, pd.Series]:
+    if indicator_cache is None:
+        return bollinger_bands(data[price_col], window, num_std)
+
+    values = indicator_cache.get_bollinger_bands(
+        data=data,
+        symbol=_infer_cache_symbol(data, cache_symbol),
+        window=window,
+        num_std=num_std,
+        price_col=price_col,
+    )
+    return values["upper"], values["middle"], values["lower"]
+
+
 def bollinger_breakout_signal(
     data: pd.DataFrame,
     window: int = 20,
@@ -76,6 +107,8 @@ def bollinger_breakout_signal(
     volume_multiplier: float = 1.2,
     volume_col: str = 'volume',
     signal_delay: int = 0,
+    indicator_cache: Optional[Any] = None,
+    cache_symbol: Optional[str] = None,
 ) -> pd.Series:
     """
     布林带突破策略
@@ -87,7 +120,14 @@ def bollinger_breakout_signal(
     可选增加价格趋势与放量确认，避免无趋势或缩量假突破。
     """
     prices = data[price_col]
-    upper_band, middle_band, lower_band = bollinger_bands(prices, window, num_std)
+    upper_band, middle_band, lower_band = _get_bollinger_bands(
+        data=data,
+        window=window,
+        num_std=num_std,
+        price_col=price_col,
+        indicator_cache=indicator_cache,
+        cache_symbol=cache_symbol,
+    )
 
     allow_long, allow_short = _create_trend_filters(
         data=data,
@@ -389,6 +429,8 @@ class BollingerBandsStrategy:
         high_col: str = 'high',
         low_col: str = 'low',
         volume_col: str = 'volume',
+        indicator_cache: Optional[Any] = None,
+        cache_symbol: Optional[str] = None,
     ):
         """
         参数:
@@ -452,6 +494,8 @@ class BollingerBandsStrategy:
         self.high_col = high_col
         self.low_col = low_col
         self.volume_col = volume_col
+        self.indicator_cache = indicator_cache
+        self.cache_symbol = cache_symbol
 
     def _required_columns(self) -> List[str]:
         required_columns = [self.price_col]
@@ -509,14 +553,19 @@ class BollingerBandsStrategy:
             num_std=self.num_std,
             price_col=self.price_col,
             signal_delay=self.signal_delay,
+            indicator_cache=self.indicator_cache,
+            cache_symbol=self.cache_symbol,
         )
 
     def get_bollinger_values(self, data: pd.DataFrame) -> dict:
         """获取布林带值用于可视化"""
-        upper_band, middle_band, lower_band = bollinger_bands(
-            data[self.price_col],
-            self.window,
-            self.num_std,
+        upper_band, middle_band, lower_band = _get_bollinger_bands(
+            data=data,
+            window=self.window,
+            num_std=self.num_std,
+            price_col=self.price_col,
+            indicator_cache=self.indicator_cache,
+            cache_symbol=self.cache_symbol,
         )
         return {
             'upper_band': upper_band,

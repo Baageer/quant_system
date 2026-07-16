@@ -7,10 +7,12 @@ from plotly.subplots import make_subplots
 import sys
 import os
 import json
+import time
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from data.data_api import DataAPI
+from data.indicator_cache import IndicatorCache
 from signals import indicators
 from signals.timing.ma_cross import MACrossStrategy
 from signals.timing.bollinger_bands import BollingerBandsStrategy
@@ -35,6 +37,11 @@ else:
 
 data_api = DataAPI(source=source, stock_file=".test1.txt",
            cache_dir="./data/raw",processed_dir="./data/processed")
+indicator_cache = IndicatorCache(
+    cache_dir="./data/processed/indicators",
+    source=source,
+    adjust_mode=data_api.adjust_mode_label,
+)
 
 
 symbol = st.sidebar.selectbox("股票代码", stock_list if stock_list else ["000001"])
@@ -132,22 +139,60 @@ if show_ma:
     df['MA_long'] = indicators.sma(df['close'], long_window)
 
 if show_bb:
-    df['BB_upper'], df['BB_middle'], df['BB_lower'] = indicators.bollinger_bands(
-        df['close'], window=bb_window, num_std=bb_std
+    bb_start_time = time.perf_counter()
+    bb_values = indicator_cache.get_bollinger_bands(
+        data=df,
+        symbol=symbol,
+        window=bb_window,
+        num_std=bb_std,
+        price_col="close",
+    )
+    bb_elapsed_ms = (time.perf_counter() - bb_start_time) * 1000
+    df['BB_upper'] = bb_values['upper']
+    df['BB_middle'] = bb_values['middle']
+    df['BB_lower'] = bb_values['lower']
+    st.sidebar.caption(
+        f"BB cache: {indicator_cache.last_cache_status}, "
+        f"{bb_elapsed_ms:.1f} ms"
     )
 
 if show_rsi:
-    df['RSI'] = indicators.rsi(df['close'], window=rsi_window)
+    rsi_values = indicator_cache.get_rsi(
+        data=df,
+        symbol=symbol,
+        window=rsi_window,
+        price_col="close",
+    )
+    df['RSI'] = rsi_values['rsi']
+    st.sidebar.caption(f"RSI cache: {indicator_cache.last_cache_status}")
 
 if show_macd:
-    df['MACD'], df['MACD_signal'], df['MACD_hist'] = indicators.macd(
-        df['close'], fast_period=macd_fast, slow_period=macd_slow, signal_period=macd_signal
+    macd_values = indicator_cache.get_macd(
+        data=df,
+        symbol=symbol,
+        fast_period=macd_fast,
+        slow_period=macd_slow,
+        signal_period=macd_signal,
+        price_col="close",
     )
+    df['MACD'] = macd_values['macd']
+    df['MACD_signal'] = macd_values['signal']
+    df['MACD_hist'] = macd_values['hist']
+    st.sidebar.caption(f"MACD cache: {indicator_cache.last_cache_status}")
 
 if show_kdj:
-    df['K'], df['D'], df['J'] = indicators.kdj(
-        df['high'], df['low'], df['close'], n=kdj_n
+    kdj_values = indicator_cache.get_kdj(
+        data=df,
+        symbol=symbol,
+        n=kdj_n,
+        high_col="high",
+        low_col="low",
+        close_col="close",
     )
+    df['K'] = kdj_values['k']
+    df['D'] = kdj_values['d']
+    df['J'] = kdj_values['j']
+    st.sidebar.caption(f"KDJ cache: {indicator_cache.last_cache_status}")
 
 # 生成策略信号
 df['signal'] = 0
@@ -156,16 +201,41 @@ if strategy_choice != "无":
         strategy = MACrossStrategy(short_window=short_window, long_window=long_window)
         df['signal'] = strategy.generate_signal(df)
     elif strategy_choice == "布林带突破":
-        strategy = BollingerBandsStrategy(window=bb_window, num_std=bb_std, mode='breakout')
+        strategy = BollingerBandsStrategy(
+            window=bb_window,
+            num_std=bb_std,
+            mode='breakout',
+            indicator_cache=indicator_cache,
+            cache_symbol=symbol,
+        )
         df['signal'] = strategy.generate_signal(df)
     elif strategy_choice == "布林带均值回归":
-        strategy = BollingerBandsStrategy(window=bb_window, num_std=bb_std, mode='mean_reversion')
+        strategy = BollingerBandsStrategy(
+            window=bb_window,
+            num_std=bb_std,
+            mode='mean_reversion',
+            indicator_cache=indicator_cache,
+            cache_symbol=symbol,
+        )
         df['signal'] = strategy.generate_signal(df)
     elif strategy_choice == "布林带收窄突破":
-        strategy = BollingerBandsStrategy(window=bb_window, num_std=bb_std, mode='squeeze',squeeze_threshold=0.15)
+        strategy = BollingerBandsStrategy(
+            window=bb_window,
+            num_std=bb_std,
+            mode='squeeze',
+            squeeze_threshold=0.15,
+            indicator_cache=indicator_cache,
+            cache_symbol=symbol,
+        )
         df['signal'] = strategy.generate_signal(df)
     elif strategy_choice == "布林带双确认突破":
-        strategy = BollingerBandsStrategy(window=bb_window, num_std=bb_std, mode='double')
+        strategy = BollingerBandsStrategy(
+            window=bb_window,
+            num_std=bb_std,
+            mode='double',
+            indicator_cache=indicator_cache,
+            cache_symbol=symbol,
+        )
         df['signal'] = strategy.generate_signal(df)
     elif strategy_choice == "成交量突破":
         strategy = VolumeBreakoutStrategy(volume_window=volume_window)

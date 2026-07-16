@@ -7,15 +7,19 @@ data:
   source: "tushare"
   adjust_mode: ""
   raw_price_adjust: "hfq"
-  stock_file: "./data/ZZ_1000.txt"
+  stock_file: "./data/HS300.txt"
   cache_dir: "./data/raw"
   processed_dir: "./data/processed"
+
+indicator_cache:
+  enabled: true
+  dir: "./data/processed/indicators"
   
 backtest:
   start_date: "2018-01-01"
   end_date: "2024-12-31"
   initial_capital: 500000
-  trade_amount: 50000
+  trade_amount: 10000
   commission_rate: 0.0003
   slippage: 0.0001
   min_commission: 5.0

@@ -3,7 +3,7 @@ MACD择时策略
 """
 import pandas as pd
 import numpy as np
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 
 def calculate_macd(
@@ -34,12 +34,52 @@ def calculate_macd(
     return macd_line, signal_line, histogram
 
 
+def _infer_cache_symbol(data: pd.DataFrame, cache_symbol: Optional[str]) -> str:
+    if cache_symbol:
+        return str(cache_symbol)
+    if "code" in data.columns:
+        codes = data["code"].dropna().astype(str).unique()
+        if len(codes) == 1:
+            return codes[0]
+    return "unknown"
+
+
+def _get_macd_values(
+    data: pd.DataFrame,
+    fast_period: int,
+    slow_period: int,
+    signal_period: int,
+    price_col: str,
+    indicator_cache: Optional[Any] = None,
+    cache_symbol: Optional[str] = None,
+) -> Tuple[pd.Series, pd.Series, pd.Series]:
+    if indicator_cache is None:
+        return calculate_macd(
+            data[price_col],
+            fast_period=fast_period,
+            slow_period=slow_period,
+            signal_period=signal_period,
+        )
+
+    values = indicator_cache.get_macd(
+        data=data,
+        symbol=_infer_cache_symbol(data, cache_symbol),
+        fast_period=fast_period,
+        slow_period=slow_period,
+        signal_period=signal_period,
+        price_col=price_col,
+    )
+    return values["macd"], values["signal"], values["hist"]
+
+
 def macd_cross_signal(
     data: pd.DataFrame,
     fast_period: int = 12,
     slow_period: int = 26,
     signal_period: int = 9,
-    price_col: str = 'close'
+    price_col: str = 'close',
+    indicator_cache: Optional[Any] = None,
+    cache_symbol: Optional[str] = None,
 ) -> pd.Series:
     """
     MACD金叉死叉策略
@@ -57,9 +97,14 @@ def macd_cross_signal(
     返回:
         信号序列: 1=做多, -1=做空, 0=空仓
     """
-    prices = data[price_col]
-    macd_line, signal_line, histogram = calculate_macd(
-        prices, fast_period, slow_period, signal_period
+    macd_line, signal_line, histogram = _get_macd_values(
+        data=data,
+        fast_period=fast_period,
+        slow_period=slow_period,
+        signal_period=signal_period,
+        price_col=price_col,
+        indicator_cache=indicator_cache,
+        cache_symbol=cache_symbol,
     )
     
     position = pd.Series(0, index=data.index)
@@ -89,7 +134,9 @@ def macd_histogram_signal(
     fast_period: int = 12,
     slow_period: int = 26,
     signal_period: int = 9,
-    price_col: str = 'close'
+    price_col: str = 'close',
+    indicator_cache: Optional[Any] = None,
+    cache_symbol: Optional[str] = None,
 ) -> pd.Series:
     """
     MACD柱状图策略
@@ -107,9 +154,14 @@ def macd_histogram_signal(
     返回:
         信号序列: 1=做多, -1=做空, 0=空仓
     """
-    prices = data[price_col]
-    macd_line, signal_line, histogram = calculate_macd(
-        prices, fast_period, slow_period, signal_period
+    macd_line, signal_line, histogram = _get_macd_values(
+        data=data,
+        fast_period=fast_period,
+        slow_period=slow_period,
+        signal_period=signal_period,
+        price_col=price_col,
+        indicator_cache=indicator_cache,
+        cache_symbol=cache_symbol,
     )
     
     position = pd.Series(0, index=data.index)
@@ -137,7 +189,9 @@ def macd_zero_axis_signal(
     fast_period: int = 12,
     slow_period: int = 26,
     signal_period: int = 9,
-    price_col: str = 'close'
+    price_col: str = 'close',
+    indicator_cache: Optional[Any] = None,
+    cache_symbol: Optional[str] = None,
 ) -> pd.Series:
     """
     MACD零轴策略
@@ -155,9 +209,14 @@ def macd_zero_axis_signal(
     返回:
         信号序列: 1=做多, -1=做空, 0=空仓
     """
-    prices = data[price_col]
-    macd_line, signal_line, histogram = calculate_macd(
-        prices, fast_period, slow_period, signal_period
+    macd_line, signal_line, histogram = _get_macd_values(
+        data=data,
+        fast_period=fast_period,
+        slow_period=slow_period,
+        signal_period=signal_period,
+        price_col=price_col,
+        indicator_cache=indicator_cache,
+        cache_symbol=cache_symbol,
     )
     
     position = pd.Series(0, index=data.index)
@@ -185,7 +244,9 @@ def macd_combined_signal(
     fast_period: int = 12,
     slow_period: int = 26,
     signal_period: int = 9,
-    price_col: str = 'close'
+    price_col: str = 'close',
+    indicator_cache: Optional[Any] = None,
+    cache_symbol: Optional[str] = None,
 ) -> pd.Series:
     """
     MACD组合策略
@@ -206,9 +267,14 @@ def macd_combined_signal(
     返回:
         信号序列: 1=做多, -1=做空, 0=空仓
     """
-    prices = data[price_col]
-    macd_line, signal_line, histogram = calculate_macd(
-        prices, fast_period, slow_period, signal_period
+    macd_line, signal_line, histogram = _get_macd_values(
+        data=data,
+        fast_period=fast_period,
+        slow_period=slow_period,
+        signal_period=signal_period,
+        price_col=price_col,
+        indicator_cache=indicator_cache,
+        cache_symbol=cache_symbol,
     )
     
     position = pd.Series(0, index=data.index)
@@ -243,7 +309,10 @@ class MACDStrategy:
         fast_period: int = 12,
         slow_period: int = 26,
         signal_period: int = 9,
-        mode: str = 'cross'
+        mode: str = 'cross',
+        price_col: str = 'close',
+        indicator_cache: Optional[Any] = None,
+        cache_symbol: Optional[str] = None,
     ):
         """
         参数:
@@ -257,6 +326,9 @@ class MACDStrategy:
         self.slow_period = slow_period
         self.signal_period = signal_period
         self.mode = mode
+        self.price_col = price_col
+        self.indicator_cache = indicator_cache
+        self.cache_symbol = cache_symbol
     
     def generate_signal(self, data: pd.DataFrame) -> pd.Series:
         """生成交易信号"""
@@ -265,27 +337,39 @@ class MACDStrategy:
                 data,
                 self.fast_period,
                 self.slow_period,
-                self.signal_period
+                self.signal_period,
+                price_col=self.price_col,
+                indicator_cache=self.indicator_cache,
+                cache_symbol=self.cache_symbol,
             )
         elif self.mode == 'zero_axis':
             return macd_zero_axis_signal(
                 data,
                 self.fast_period,
                 self.slow_period,
-                self.signal_period
+                self.signal_period,
+                price_col=self.price_col,
+                indicator_cache=self.indicator_cache,
+                cache_symbol=self.cache_symbol,
             )
         elif self.mode == 'combined':
             return macd_combined_signal(
                 data,
                 self.fast_period,
                 self.slow_period,
-                self.signal_period
+                self.signal_period,
+                price_col=self.price_col,
+                indicator_cache=self.indicator_cache,
+                cache_symbol=self.cache_symbol,
             )
         return macd_cross_signal(
             data,
             self.fast_period,
             self.slow_period,
-            self.signal_period
+            self.signal_period,
+            price_col=self.price_col,
+            indicator_cache=self.indicator_cache,
+            cache_symbol=self.cache_symbol,
         )
     
     def get_macd_values(
@@ -294,11 +378,14 @@ class MACDStrategy:
         price_col: str = 'close'
     ) -> dict:
         """获取MACD值用于可视化"""
-        macd_line, signal_line, histogram = calculate_macd(
-            data[price_col],
-            self.fast_period,
-            self.slow_period,
-            self.signal_period
+        macd_line, signal_line, histogram = _get_macd_values(
+            data=data,
+            fast_period=self.fast_period,
+            slow_period=self.slow_period,
+            signal_period=self.signal_period,
+            price_col=price_col,
+            indicator_cache=self.indicator_cache,
+            cache_symbol=self.cache_symbol,
         )
         return {
             'macd': macd_line,

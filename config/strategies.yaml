@@ -10,10 +10,10 @@ timing_strategies:
       ma_filter_window: 30
       use_trend_filter: false
       trend_window: 60
-      trend_slope_window: 3
+      trend_slope_window: 7
       use_volume_filter: true
       volume_window: 20
-      volume_multiplier: 1.5
+      volume_multiplier: 2
     min_data_length: 30
     description: "Go long on short MA crossing above long MA, short/exit on cross down."
 
@@ -65,7 +65,7 @@ timing_strategies:
       use_trend_filter: false
       trend_window: 60
       trend_slope_window: 3
-      use_volume_filter: false
+      use_volume_filter: true
       volume_window: 20
       volume_multiplier: 1.2
     min_data_length: 35
@@ -127,7 +127,7 @@ timing_strategies:
       squeeze_threshold: null
       squeeze_quantile: 0.05
       squeeze_lookback: 60
-      use_trend_filter: true
+      use_trend_filter: false
       trend_window: 60
       use_volume_filter: true
       volume_window: 60
@@ -276,7 +276,7 @@ stop_strategies:
       holding_day: 30
       atr_window: 14
       atr_multiplier: 1
-    min_data_length: 20
+    min_data_length: 60
     description: "Trigger stop loss based on configured method."
 
   stop_profit:
@@ -288,8 +288,8 @@ stop_strategies:
       profit_type: "trailing"
       holding_day: 30
       atr_window: 14
-      atr_multiplier: 2
-    min_data_length: 20
+      atr_multiplier: 1
+    min_data_length: 60
     description: "Trigger stop profit based on configured method."
 
 # backtest:

@@ -2,11 +2,15 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from data.indicator_cache import IndicatorCache
+from run_backtest import apply_signals_to_dataframe
+from signals.signal_engine import SignalEngine
 from signals.timing.bollinger_bands import (
     BollingerBandsStrategy,
     bollinger_breakout_signal,
     bollinger_squeeze_signal,
 )
+from signals.timing.common_filters import COMMON_TIMING_FILTER_DEFAULTS, FilteredTimingStrategy
 
 
 def _sample_ohlc(n: int = 160) -> pd.DataFrame:
@@ -157,3 +161,75 @@ class TestBollingerBandsBehavior:
 
         assert signal_without_filter.iloc[-1] == 1
         assert signal_with_filter.iloc[-1] == 0
+
+
+class TestBollingerBandsCacheIntegration:
+    def test_breakout_signal_reuses_indicator_cache(self, tmpdir):
+        df = _sample_ohlc()
+        cache = IndicatorCache(cache_dir=str(tmpdir))
+
+        first = bollinger_breakout_signal(
+            data=df,
+            window=20,
+            num_std=2.0,
+            indicator_cache=cache,
+            cache_symbol="000001.SZ",
+        )
+        assert cache.last_cache_status == "miss"
+
+        second = bollinger_breakout_signal(
+            data=df,
+            window=20,
+            num_std=2.0,
+            indicator_cache=cache,
+            cache_symbol="000001.SZ",
+        )
+        assert cache.last_cache_status == "hit"
+        pd.testing.assert_series_equal(first, second)
+
+    def test_strategy_breakout_uses_indicator_cache(self, tmpdir):
+        df = _sample_ohlc()
+        cache = IndicatorCache(cache_dir=str(tmpdir))
+        strategy = BollingerBandsStrategy(
+            mode="breakout",
+            window=20,
+            num_std=2.0,
+            indicator_cache=cache,
+            cache_symbol="000001.SZ",
+        )
+
+        strategy.generate_signal(df)
+        assert cache.last_cache_status == "miss"
+
+        values = strategy.get_bollinger_values(df)
+        assert cache.last_cache_status == "hit"
+        assert set(values) == {"upper_band", "middle_band", "lower_band"}
+
+    def test_backtest_signal_application_injects_cache_into_wrapped_strategy(self, tmpdir):
+        df = _sample_ohlc()
+        cache = IndicatorCache(cache_dir=str(tmpdir))
+        base_strategy = BollingerBandsStrategy(
+            mode="breakout",
+            window=20,
+            num_std=2.0,
+        )
+        wrapped_strategy = FilteredTimingStrategy(
+            base_strategy,
+            dict(COMMON_TIMING_FILTER_DEFAULTS),
+        )
+
+        result = apply_signals_to_dataframe(
+            df=df.copy(),
+            strategies=[wrapped_strategy],
+            signal_engine=SignalEngine(),
+            signal_weights=[1.0],
+            signal_combination="weighted",
+            signal_threshold=0.5,
+            symbol="000001.SZ",
+            indicator_cache=cache,
+        )
+
+        assert "signal" in result.columns
+        assert base_strategy.indicator_cache is cache
+        assert base_strategy.cache_symbol == "000001.SZ"
+        assert cache.last_cache_status == "miss"

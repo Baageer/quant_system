@@ -12,17 +12,20 @@ import os
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 import yaml
 from tqdm import tqdm
 
+from concurrent.futures import ProcessPoolExecutor, as_completed
+
 from backtest.engine import BacktestEngine
 from backtest.metrics import calculate_max_drawdown, calculate_sharpe_ratio
 from backtest.performance import PerformanceAnalyzer
 from data.data_api import DataAPI
+from data.indicator_cache import IndicatorCache
 from signals.signal_engine import SignalEngine
 from signals.strategy_loader import StrategyLoader
 from utils.logger import setup_logger
@@ -45,13 +48,16 @@ PRICE_COLUMNS = [
 
 
 def create_strategy_function(trade_amount):
-    """Create the broker-facing strategy callback from per-symbol signals."""
+    """Create the broker-facing strategy callback from per-symbol signals.
+    Optimized to reduce unnecessary iterations and handle filtered data.
+    """
 
     def strategy_func(date, data, positions):
         signals = {}
 
+        # Process only the filtered data passed in (already optimized by engine)
         for symbol, df in data.items():
-            # print(symbol)
+            # Skip if date not in index (shouldn't happen with filtered data, but safe check)
             if date not in df.index:
                 continue
 
@@ -143,6 +149,28 @@ def read_csv_with_fallback(filepath: Union[str, Path]) -> pd.DataFrame:
     if last_error is not None:
         raise last_error
     return pd.read_csv(filepath)
+
+
+def attach_indicator_cache_to_strategies(
+    strategies: List[object],
+    indicator_cache: Optional[IndicatorCache],
+    symbol: str,
+) -> None:
+    """Attach per-symbol indicator cache context to strategies that support it."""
+    if indicator_cache is None:
+        return
+
+    for strategy in strategies:
+        current = strategy
+        visited = set()
+        while current is not None and id(current) not in visited:
+            visited.add(id(current))
+            attrs = vars(current) if hasattr(current, "__dict__") else {}
+            if "indicator_cache" in attrs:
+                current.indicator_cache = indicator_cache
+            if "cache_symbol" in attrs:
+                current.cache_symbol = symbol
+            current = attrs.get("_strategy")
 
 
 def standardize_index_list(index_list_df: pd.DataFrame) -> pd.DataFrame:
@@ -292,8 +320,13 @@ def apply_signals_to_dataframe(
     signal_weights: List[float],
     signal_combination: str,
     signal_threshold: float,
+    symbol: Optional[str] = None,
+    indicator_cache: Optional[IndicatorCache] = None,
 ) -> pd.DataFrame:
     """Generate and attach signal series using configured strategy logic."""
+    if symbol is not None:
+        attach_indicator_cache_to_strategies(strategies, indicator_cache, symbol)
+
     if len(strategies) == 1:
         df["signal"] = strategies[0].generate_signal(df)
         return df
@@ -322,6 +355,94 @@ def apply_signals_to_dataframe(
     return df
 
 
+def load_single_symbol_stock(
+    symbol: str,
+    start_date: str,
+    end_date: str,
+    source: str,
+    stock_file: str,
+    cache_dir: str,
+    processed_dir: str,
+    adjust_mode: str,
+    raw_price_adjust: str,
+    min_data_length: int,
+    price_columns: List[str],
+) -> Tuple[str, Optional[pd.DataFrame]]:
+    """Load and process a single stock symbol's data for parallel execution."""
+    from data.data_api import DataAPI
+
+    try:
+        data_api = DataAPI(
+            source=source,
+            stock_file=stock_file,
+            cache_dir=cache_dir,
+            processed_dir=processed_dir,
+            adjust_mode=adjust_mode,
+            raw_price_adjust=raw_price_adjust,
+        )
+        df = data_api.get_price_history_data(symbol, start_date, end_date)
+        df.columns = price_columns
+
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.set_index("date")
+        df = df.sort_index()
+
+        invalid_prices = DataAPI.detect_non_positive_prices(df)
+        if invalid_prices:
+            return symbol, None
+
+        if len(df) < min_data_length:
+            df["signal"] = np.nan
+            return symbol, df
+
+        return symbol, df
+    except Exception:
+        return symbol, None
+
+
+def load_single_symbol_industry(
+    symbol: str,
+    csv_path: Path,
+    start_date: str,
+    end_date: str,
+    min_data_length: int,
+    price_columns: List[str],
+) -> Tuple[str, Optional[pd.DataFrame]]:
+    """Load and process a single industry index's data for parallel execution."""
+    try:
+        raw_df = read_csv_with_fallback(csv_path)
+        df = standardize_industry_price_frame(raw_df, symbol)
+        df = df[
+            pd.to_datetime(df["date"], errors="coerce").between(
+                pd.Timestamp(start_date),
+                pd.Timestamp(end_date),
+                inclusive="both",
+            )
+        ].reset_index(drop=True)
+
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.set_index("date")
+        df = df.sort_index()
+
+        invalid_prices = {}
+        for col in ["open", "close", "high", "low"]:
+            if col in df.columns:
+                numeric = pd.to_numeric(df[col], errors="coerce")
+                invalid_count = int((numeric.notnull() & (numeric <= 0)).sum())
+                if invalid_count > 0:
+                    invalid_prices[col] = invalid_count
+        if invalid_prices:
+            return symbol, None
+
+        if len(df) < min_data_length:
+            df["signal"] = np.nan
+            return symbol, df
+
+        return symbol, df
+    except Exception:
+        return symbol, None
+
+
 def run_backtest(
     strategy_name: Union[str, List[str]],
     start_date: str = None,
@@ -343,6 +464,7 @@ def run_backtest(
     industry_index_list_file: Optional[str] = None,
     industry_index_data_dir: Optional[str] = None,
     industry_index_codes: Optional[List[str]] = None,
+    max_workers: int = 4,
 ):
     """Run a configured backtest."""
 
@@ -449,6 +571,7 @@ def run_backtest(
     logger.info("=" * 60)
 
     data_api = None
+    indicator_cache = None
     universe_type = (universe_type or "stock").strip().lower()
     if universe_type not in {"stock", "industry"}:
         raise ValueError(f"Unsupported universe_type: {universe_type}. Expected stock or industry.")
@@ -483,74 +606,157 @@ def run_backtest(
             adjust_mode=adjust_mode,
             raw_price_adjust=raw_price_adjust,
         )
+        indicator_cache_config = config.get("indicator_cache", {})
+        indicator_cache = IndicatorCache(
+            cache_dir=indicator_cache_config.get(
+                "dir",
+                os.path.join(config["data"]["processed_dir"], "indicators"),
+            ),
+            source=data_source,
+            adjust_mode=data_api.adjust_mode_label,
+            enabled=indicator_cache_config.get("enabled", True),
+        )
+        logger.info(f"Indicator cache dir: {indicator_cache.cache_dir}")
         symbols = data_api.get_stock_list()
         # symbols = symbols[440:]
         if stock_max_number != -1 and len(symbols) > stock_max_number:
             symbols = symbols[:stock_max_number]
         logger.info(f"Stock count: {len(symbols)}")
 
-    data_iterator = tqdm(
-        symbols,
-        desc="Data loading",
-        unit="index" if universe_type == "industry" else "symbol",
-        disable=False,
-    )
+    logger.info(f"Loading data with {max_workers} workers...")
     data = {}
 
-    for symbol in data_iterator:
-        if universe_type == "industry":
-            csv_path = industry_file_lookup.get(symbol)
-            if csv_path is None:
-                industry_name = industry_name_map.get(symbol, "")
-                logger.warning(f"Skipping {symbol} ({industry_name}): missing industry index csv file")
-                continue
-            raw_df = read_csv_with_fallback(csv_path)
-            df = standardize_industry_price_frame(raw_df, symbol)
-            df = df[
-                pd.to_datetime(df["date"], errors="coerce").between(
-                    pd.Timestamp(start_date),
-                    pd.Timestamp(end_date),
-                    inclusive="both",
-                )
-            ].reset_index(drop=True)
-        else:
-            if data_api is None:
-                raise RuntimeError("DataAPI is not initialized for stock universe.")
-            df = data_api.get_price_history_data(symbol, start_date, end_date)
-            df.columns = PRICE_COLUMNS
+    if max_workers > 1 and len(symbols) > 1:
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            futures = {}
 
-        df["date"] = pd.to_datetime(df["date"])
-        df = df.set_index("date")
-        df = df.sort_index()
+            if universe_type == "industry":
+                for symbol in symbols:
+                    csv_path = industry_file_lookup.get(symbol)
+                    if csv_path is None:
+                        industry_name = industry_name_map.get(symbol, "")
+                        logger.warning(f"Skipping {symbol} ({industry_name}): missing industry index csv file")
+                        continue
+                    future = executor.submit(
+                        load_single_symbol_industry,
+                        symbol=symbol,
+                        csv_path=csv_path,
+                        start_date=start_date,
+                        end_date=end_date,
+                        min_data_length=min_data_length,
+                        price_columns=PRICE_COLUMNS,
+                    )
+                    futures[future] = symbol
+            else:
+                for symbol in symbols:
+                    future = executor.submit(
+                        load_single_symbol_stock,
+                        symbol=symbol,
+                        start_date=start_date,
+                        end_date=end_date,
+                        source=data_source,
+                        stock_file=stock_file,
+                        cache_dir=config["data"]["cache_dir"],
+                        processed_dir=config["data"]["processed_dir"],
+                        adjust_mode=adjust_mode,
+                        raw_price_adjust=raw_price_adjust,
+                        min_data_length=min_data_length,
+                        price_columns=PRICE_COLUMNS,
+                    )
+                    futures[future] = symbol
 
-        invalid_prices = DataAPI.detect_non_positive_prices(df)
-        if invalid_prices:
-            invalid_summary = ", ".join(
-                f"{column}={count}" for column, count in invalid_prices.items()
-            )
-            adjust_mode_label = data_api.adjust_mode_label if data_api is not None else "raw"
-            logger.warning(
-                f"Skipping {symbol}: found non-positive prices under "
-                f"adjust_mode={adjust_mode_label} ({invalid_summary})"
-            )
-            continue
-
-        if len(df) < min_data_length:
-            df["signal"] = np.nan
-            data[symbol] = df
-            continue
-
-        df = apply_signals_to_dataframe(
-            df=df,
-            strategies=strategies,
-            signal_engine=signal_engine,
-            signal_weights=signal_weights,
-            signal_combination=signal_combination,
-            signal_threshold=signal_threshold,
+            with tqdm(total=len(futures), desc="Data loading", disable=False) as pbar:
+                for future in as_completed(futures):
+                    symbol = futures[future]
+                    try:
+                        _, df = future.result()
+                        if df is not None:
+                            data[symbol] = df
+                    except Exception as e:
+                        logger.warning(f"Failed to load {symbol}: {e}")
+                    pbar.update(1)
+    else:
+        data_iterator = tqdm(
+            symbols,
+            desc="Data loading",
+            unit="index" if universe_type == "industry" else "symbol",
+            disable=False,
         )
+        for symbol in data_iterator:
+            if universe_type == "industry":
+                csv_path = industry_file_lookup.get(symbol)
+                if csv_path is None:
+                    industry_name = industry_name_map.get(symbol, "")
+                    logger.warning(f"Skipping {symbol} ({industry_name}): missing industry index csv file")
+                    continue
+                raw_df = read_csv_with_fallback(csv_path)
+                df = standardize_industry_price_frame(raw_df, symbol)
+                df = df[
+                    pd.to_datetime(df["date"], errors="coerce").between(
+                        pd.Timestamp(start_date),
+                        pd.Timestamp(end_date),
+                        inclusive="both",
+                    )
+                ].reset_index(drop=True)
+            else:
+                if data_api is None:
+                    raise RuntimeError("DataAPI is not initialized for stock universe.")
+                df = data_api.get_price_history_data(symbol, start_date, end_date)
+                df.columns = PRICE_COLUMNS
 
-        data[symbol] = df
-        data_iterator.set_postfix({"loading": symbol})
+            df["date"] = pd.to_datetime(df["date"])
+            df = df.set_index("date")
+            df = df.sort_index()
+
+            invalid_prices = DataAPI.detect_non_positive_prices(df)
+            if invalid_prices:
+                invalid_summary = ", ".join(
+                    f"{column}={count}" for column, count in invalid_prices.items()
+                )
+                adjust_mode_label = data_api.adjust_mode_label if data_api is not None else "raw"
+                logger.warning(
+                    f"Skipping {symbol}: found non-positive prices under "
+                    f"adjust_mode={adjust_mode_label} ({invalid_summary})"
+                )
+                continue
+
+            if len(df) < min_data_length:
+                df["signal"] = np.nan
+                data[symbol] = df
+                continue
+
+            df = apply_signals_to_dataframe(
+                df=df,
+                strategies=strategies,
+                signal_engine=signal_engine,
+                signal_weights=signal_weights,
+                signal_combination=signal_combination,
+                signal_threshold=signal_threshold,
+                symbol=symbol,
+                indicator_cache=indicator_cache,
+            )
+
+            data[symbol] = df
+            data_iterator.set_postfix({"loading": symbol})
+
+    if data and "signal" not in next(iter(data.values())).columns:
+        logger.info("Applying signals to loaded data...")
+        for symbol in tqdm(data.keys(), desc="Applying signals", disable=False):
+            df = data[symbol]
+            if len(df) < min_data_length:
+                df["signal"] = np.nan
+            else:
+                df = apply_signals_to_dataframe(
+                    df=df,
+                    strategies=strategies,
+                    signal_engine=signal_engine,
+                    signal_weights=signal_weights,
+                    signal_combination=signal_combination,
+                    signal_threshold=signal_threshold,
+                    symbol=symbol,
+                    indicator_cache=indicator_cache,
+                )
+            data[symbol] = df
 
     if not data:
         adjust_mode_label = data_api.adjust_mode_label if data_api is not None else "raw"
@@ -832,6 +1038,13 @@ def main():
         default=None,
         help="Comma-separated industry index codes, for example 881121,881273",
     )
+    parser.add_argument(
+        "--workers",
+        "-w",
+        type=int,
+        default=4,
+        help="Number of parallel workers for data loading. Use 1 for single process mode.",
+    )
 
     args = parser.parse_args()
 
@@ -871,6 +1084,7 @@ def main():
         industry_index_list_file=args.industry_index_list_file,
         industry_index_data_dir=args.industry_index_data_dir,
         industry_index_codes=industry_index_codes,
+        max_workers=args.workers,
     )
 
 

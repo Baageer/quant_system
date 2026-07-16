@@ -5,6 +5,9 @@ import pytest
 import pandas as pd
 import numpy as np
 import signals.timing.macd as macd_module
+from data.indicator_cache import IndicatorCache
+from run_backtest import apply_signals_to_dataframe
+from signals.signal_engine import SignalEngine
 from signals.timing.macd import (
     calculate_macd,
     macd_cross_signal,
@@ -13,6 +16,7 @@ from signals.timing.macd import (
     macd_combined_signal,
     MACDStrategy
 )
+from signals.timing.common_filters import COMMON_TIMING_FILTER_DEFAULTS, FilteredTimingStrategy
 
 
 @pytest.fixture
@@ -285,6 +289,41 @@ class TestMACDStrategy:
         assert isinstance(macd_values['macd'], pd.Series)
         assert isinstance(macd_values['signal'], pd.Series)
         assert isinstance(macd_values['histogram'], pd.Series)
+
+    def test_strategy_uses_indicator_cache(self, sample_data, tmpdir):
+        cache = IndicatorCache(cache_dir=str(tmpdir))
+        strategy = MACDStrategy(indicator_cache=cache, cache_symbol="000001.SZ")
+
+        first = strategy.generate_signal(sample_data)
+        assert cache.last_cache_status == "miss"
+
+        second = strategy.generate_signal(sample_data)
+        assert cache.last_cache_status == "hit"
+        pd.testing.assert_series_equal(first, second)
+
+    def test_backtest_signal_application_injects_cache_into_wrapped_strategy(self, sample_data, tmpdir):
+        cache = IndicatorCache(cache_dir=str(tmpdir))
+        base_strategy = MACDStrategy(mode="cross")
+        wrapped_strategy = FilteredTimingStrategy(
+            base_strategy,
+            dict(COMMON_TIMING_FILTER_DEFAULTS),
+        )
+
+        result = apply_signals_to_dataframe(
+            df=sample_data.copy(),
+            strategies=[wrapped_strategy],
+            signal_engine=SignalEngine(),
+            signal_weights=[1.0],
+            signal_combination="weighted",
+            signal_threshold=0.5,
+            symbol="000001.SZ",
+            indicator_cache=cache,
+        )
+
+        assert "signal" in result.columns
+        assert base_strategy.indicator_cache is cache
+        assert base_strategy.cache_symbol == "000001.SZ"
+        assert cache.last_cache_status == "miss"
     
     def test_modes_produce_different_signals(self, oscillation_data):
         strategy_cross = MACDStrategy(mode='cross')
