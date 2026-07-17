@@ -1,25 +1,22 @@
 project:
-  name: "quant_system"
-  version: "1.0.0"
-  description: "量化交易系统"
-
+  name: quant_system
+  version: 1.0.0
+  description: 量化交易系统
 data:
-  source: "tushare"
-  adjust_mode: ""
-  raw_price_adjust: "hfq"
-  stock_file: "./data/HS300.txt"
-  cache_dir: "./data/raw"
-  processed_dir: "./data/processed"
-
+  source: tushare
+  adjust_mode: ''
+  raw_price_adjust: hfq
+  stock_file: ./data/ZZ_1000.txt
+  cache_dir: ./data/raw
+  processed_dir: ./data/processed
 indicator_cache:
   enabled: true
-  dir: "./data/processed/indicators"
-  
+  dir: ./data/processed/indicators
 backtest:
-  start_date: "2018-01-01"
-  end_date: "2024-12-31"
-  initial_capital: 500000
-  trade_amount: 10000
+  start_date: '2015-01-01'
+  end_date: '2025-12-31'
+  initial_capital: 500000.0
+  trade_amount: 10000.0
   commission_rate: 0.0003
   slippage: 0.0001
   min_commission: 5.0
@@ -31,17 +28,29 @@ backtest:
     block_suspended: true
     block_limit_up: true
     block_limit_down: true
-    limit_pct: 0.10
+    limit_pct: 0.1
     st_limit_pct: 0.05
     limit_pct_by_prefix:
-      "300": 0.20
-      "301": 0.20
-      "688": 0.20
-      "4": 0.30
-      "8": 0.30
-  
-  
+      '300': 0.2
+      '301': 0.2
+      '688': 0.2
+      '4': 0.3
+      '8': 0.3
 strategy:
-  rebalance_freq: "monthly"
+  rebalance_freq: monthly
   max_position_pct: 0.05
   min_position_pct: 0.01
+live_backtest:
+  universe_type: stock
+  industry_index_codes: []
+  stock_max_number: -1
+  max_workers: 4
+  signal_workers: 4
+  selected_strategies:
+  - bollinger_squeeze
+  signal_combination: weighted
+  signal_threshold: 0.5
+  signal_weights:
+    bollinger_squeeze: 1.0
+  enable_stop_loss: true
+  enable_stop_profit: true

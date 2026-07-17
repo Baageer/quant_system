@@ -1,8 +1,8 @@
 timing_strategies:
   ma_cross:
-    name: "MA Cross Strategy"
-    module: "signals.timing.ma_cross"
-    class: "MACrossStrategy"
+    name: MA Cross Strategy
+    module: signals.timing.ma_cross
+    class: MACrossStrategy
     params:
       short_window: 5
       long_window: 20
@@ -15,17 +15,16 @@ timing_strategies:
       volume_window: 20
       volume_multiplier: 2
     min_data_length: 30
-    description: "Go long on short MA crossing above long MA, short/exit on cross down."
-
+    description: Go long on short MA crossing above long MA, short/exit on cross down.
   rsi:
-    name: "RSI Strategy"
-    module: "signals.timing.rsi"
-    class: "RSIStrategy"
+    name: RSI Strategy
+    module: signals.timing.rsi
+    class: RSIStrategy
     params:
       window: 14
       oversold: 30
       overbought: 70
-      mode: "standard"
+      mode: standard
       use_trend_filter: false
       trend_window: 60
       trend_slope_window: 3
@@ -33,17 +32,16 @@ timing_strategies:
       volume_window: 20
       volume_multiplier: 1.2
     min_data_length: 20
-    description: "RSI oversold long, overbought short/exit."
-
+    description: RSI oversold long, overbought short/exit.
   rsi_cross:
-    name: "RSI Cross Strategy"
-    module: "signals.timing.rsi"
-    class: "RSIStrategy"
+    name: RSI Cross Strategy
+    module: signals.timing.rsi
+    class: RSIStrategy
     params:
       window: 14
       oversold: 30
       overbought: 70
-      mode: "cross"
+      mode: cross
       use_trend_filter: false
       trend_window: 60
       trend_slope_window: 3
@@ -51,17 +49,16 @@ timing_strategies:
       volume_window: 20
       volume_multiplier: 1.2
     min_data_length: 20
-    description: "RSI crossing out of extreme zones generates entries."
-
+    description: RSI crossing out of extreme zones generates entries.
   macd:
-    name: "MACD Strategy"
-    module: "signals.timing.macd"
-    class: "MACDStrategy"
+    name: MACD Strategy
+    module: signals.timing.macd
+    class: MACDStrategy
     params:
       fast_period: 12
       slow_period: 26
       signal_period: 9
-      mode: "cross"
+      mode: cross
       use_trend_filter: false
       trend_window: 60
       trend_slope_window: 3
@@ -69,17 +66,16 @@ timing_strategies:
       volume_window: 20
       volume_multiplier: 1.2
     min_data_length: 35
-    description: "MACD cross strategy."
-
+    description: MACD cross strategy.
   macd_histogram:
-    name: "MACD Histogram Strategy"
-    module: "signals.timing.macd"
-    class: "MACDStrategy"
+    name: MACD Histogram Strategy
+    module: signals.timing.macd
+    class: MACDStrategy
     params:
       fast_period: 12
       slow_period: 26
       signal_period: 9
-      mode: "histogram"
+      mode: histogram
       use_trend_filter: false
       trend_window: 60
       trend_slope_window: 3
@@ -87,62 +83,59 @@ timing_strategies:
       volume_window: 20
       volume_multiplier: 1.2
     min_data_length: 35
-    description: "Histogram sign-change based momentum strategy."
-
+    description: Histogram sign-change based momentum strategy.
   bollinger_breakout:
-    name: "Bollinger Breakout"
-    module: "signals.timing.bollinger_bands"
-    class: "BollingerBandsStrategy"
+    name: Bollinger Breakout
+    module: signals.timing.bollinger_bands
+    class: BollingerBandsStrategy
     params:
       window: 20
       num_std: 2.0
-      mode: "breakout"
+      mode: breakout
       use_trend_filter: true
       trend_window: 60
       use_volume_filter: true
       volume_window: 20
       volume_multiplier: 1.2
     min_data_length: 25
-    description: "Breakout outside Bollinger bands with optional filters."
-
+    description: Breakout outside Bollinger bands with optional filters.
   bollinger_mean_reversion:
-    name: "Bollinger Mean Reversion"
-    module: "signals.timing.bollinger_bands"
-    class: "BollingerBandsStrategy"
+    name: Bollinger Mean Reversion
+    module: signals.timing.bollinger_bands
+    class: BollingerBandsStrategy
     params:
       window: 20
       num_std: 2.0
-      mode: "mean_reversion"
+      mode: mean_reversion
     min_data_length: 25
-    description: "Mean-reversion around Bollinger bands."
-
+    description: Mean-reversion around Bollinger bands.
   bollinger_squeeze:
-    name: "Bollinger Squeeze Breakout"
-    module: "signals.timing.bollinger_bands"
-    class: "BollingerBandsStrategy"
+    name: Bollinger Squeeze Breakout
+    module: signals.timing.bollinger_bands
+    class: BollingerBandsStrategy
     params:
       window: 30
       num_std: 2.0
-      mode: "squeeze"
+      mode: squeeze
       squeeze_threshold: null
       squeeze_quantile: 0.05
       squeeze_lookback: 60
       use_trend_filter: false
       trend_window: 60
+      trend_slope_window: 7
       use_volume_filter: true
       volume_window: 60
       volume_multiplier: 2
     min_data_length: 25
-    description: "Squeeze then breakout with optional confirmation filters."
-
+    description: Squeeze then breakout with optional confirmation filters.
   bollinger_double:
-    name: "Bollinger Double Confirmation"
-    module: "signals.timing.bollinger_bands"
-    class: "BollingerBandsStrategy"
+    name: Bollinger Double Confirmation
+    module: signals.timing.bollinger_bands
+    class: BollingerBandsStrategy
     params:
       window: 20
       num_std: 2.0
-      mode: "double"
+      mode: double
       confirm_bars: 2
       use_trend_filter: true
       trend_window: 60
@@ -150,24 +143,23 @@ timing_strategies:
       volume_window: 20
       volume_multiplier: 1.2
     min_data_length: 25
-    description: "Require multiple bars outside bands before entry."
-
+    description: Require multiple bars outside bands before entry.
   rsrs:
-    name: "RSRS Breakout Strategy"
-    module: "signals.timing.rsrs"
-    class: "RSRSStrategy"
+    name: RSRS Breakout Strategy
+    module: signals.timing.rsrs
+    class: RSRSStrategy
     params:
       window: 20
       zscore_window: 90
       min_valid_window: 12
       entry_zscore: 1.0
       exit_zscore: 0.0
-      breakout_direction: "up"
+      breakout_direction: up
       use_r2_weight: true
       use_beta_adjustment: false
       signal_delay: 0
-      high_col: "high"
-      low_col: "low"
+      high_col: high
+      low_col: low
       use_trend_filter: true
       trend_window: 20
       trend_slope_window: 3
@@ -175,63 +167,58 @@ timing_strategies:
       volume_window: 20
       volume_multiplier: 2.0
     min_data_length: 140
-    description: "RSRS score breaks threshold to establish timing position."
-
+    description: RSRS score breaks threshold to establish timing position.
   volume_breakout:
-    name: "Volume Breakout"
-    module: "signals.timing.volume"
-    class: "VolumeBreakoutStrategy"
+    name: Volume Breakout
+    module: signals.timing.volume
+    class: VolumeBreakoutStrategy
     params:
       volume_window: 20
       z_thresh: 2.0
       trend_window: 50
-      price_col: "close"
-      volume_col: "volume"
+      price_col: close
+      volume_col: volume
     min_data_length: 50
-    description: "Volume expansion with trend confirmation."
-
+    description: Volume expansion with trend confirmation.
   obv:
-    name: "OBV Strategy"
-    module: "signals.timing.volume"
-    class: "OBVStrategy"
+    name: OBV Strategy
+    module: signals.timing.volume
+    class: OBVStrategy
     params:
       obv_window: 20
-      price_col: "close"
-      volume_col: "volume"
+      price_col: close
+      volume_col: volume
     min_data_length: 20
-    description: "OBV slope with price trend confirmation."
-
+    description: OBV slope with price trend confirmation.
   mfi:
-    name: "MFI Strategy"
-    module: "signals.timing.volume"
-    class: "MFIStrategy"
+    name: MFI Strategy
+    module: signals.timing.volume
+    class: MFIStrategy
     params:
       mfi_window: 14
       overbought: 80
       oversold: 20
       trend_window: 50
-      high_col: "high"
-      low_col: "low"
-      close_col: "close"
-      volume_col: "volume"
+      high_col: high
+      low_col: low
+      close_col: close
+      volume_col: volume
     min_data_length: 50
-    description: "MFI crossing with trend confirmation."
-
+    description: MFI crossing with trend confirmation.
   volume_price_divergence:
-    name: "Volume-Price Divergence"
-    module: "signals.timing.volume"
-    class: "VolumePriceDivergenceStrategy"
+    name: Volume-Price Divergence
+    module: signals.timing.volume
+    class: VolumePriceDivergenceStrategy
     params:
       window: 20
-      price_col: "close"
-      volume_col: "volume"
+      price_col: close
+      volume_col: volume
     min_data_length: 20
-    description: "Volume-price divergence signal."
-
+    description: Volume-price divergence signal.
   vwap_distance:
-    name: "VWAP Distance Strategy"
-    module: "signals.timing.vwap_distance"
-    class: "VWAPDistanceStrategy"
+    name: VWAP Distance Strategy
+    module: signals.timing.vwap_distance
+    class: VWAPDistanceStrategy
     params:
       window: 20
       threshold: 0.01
@@ -243,12 +230,12 @@ timing_strategies:
       volume_window: 20
       volume_multiplier: 1.2
     min_data_length: 25
-    description: "VWAP distance strategy with negative direction (lower VWAP distance = higher expected return)."
-
+    description: VWAP distance strategy with negative direction (lower VWAP distance
+      = higher expected return).
   rsrs_beta:
-    name: "RSRS Beta Strategy"
-    module: "signals.timing.rsrs_beta"
-    class: "RSRSBetaStrategy"
+    name: RSRS Beta Strategy
+    module: signals.timing.rsrs_beta
+    class: RSRSBetaStrategy
     params:
       window: 20
       zscore_window: 90
@@ -263,38 +250,30 @@ timing_strategies:
       volume_window: 20
       volume_multiplier: 1.5
     min_data_length: 140
-    description: "RSRS beta strategy with negative direction (lower beta = higher expected return)."
-
+    description: RSRS beta strategy with negative direction (lower beta = higher expected
+      return).
 stop_strategies:
   stop_loss:
-    name: "Stop Loss Strategy"
-    module: "signals.stop.stop_loss"
-    class: "StopLossStrategy"
+    name: Stop Loss Strategy
+    module: signals.stop.stop_loss
+    class: StopLossStrategy
     params:
-      loss_pct: 0.060
-      loss_type: "atr"
+      loss_pct: 0.06
+      loss_type: atr
       holding_day: 30
       atr_window: 14
-      atr_multiplier: 1
+      atr_multiplier: 2
     min_data_length: 60
-    description: "Trigger stop loss based on configured method."
-
+    description: Trigger stop loss based on configured method.
   stop_profit:
-    name: "Stop Profit Strategy"
-    module: "signals.stop.stop_profit"
-    class: "StopProfitStrategy"
+    name: Stop Profit Strategy
+    module: signals.stop.stop_profit
+    class: StopProfitStrategy
     params:
-      profit_pct: 0.07500
-      profit_type: "trailing"
+      profit_pct: 0.075
+      profit_type: trailing
       holding_day: 30
       atr_window: 14
-      atr_multiplier: 1
+      atr_multiplier: 2
     min_data_length: 60
-    description: "Trigger stop profit based on configured method."
-
-# backtest:
-#   default_strategy: "ma_cross"
-#   trade_amount: 100000
-#   initial_capital: 1000000
-#   commission_rate: 0.0003
-#   slippage: 0.0001
+    description: Trigger stop profit based on configured method.

@@ -69,6 +69,7 @@ class BacktestRequest:
     industry_index_data_dir: Optional[str] = None
     industry_index_codes: Optional[List[str]] = None
     max_workers: int = 1
+    signal_workers: int = 1
     show_progress: bool = False
 
 
@@ -278,6 +279,88 @@ def make_indicator_cache(config: Dict[str, Any], source: str, adjust_mode_label:
     )
 
 
+_SIGNAL_WORKER_CONTEXT: Dict[str, Any] = {}
+
+
+def _initialize_signal_worker(
+    request: BacktestRequest,
+    config: Dict[str, Any],
+    source: str,
+    adjust_mode_label: str,
+    universe_type: str,
+) -> None:
+    """Initialize isolated strategy state for one signal worker process."""
+    strategies, _, min_data_length = build_timing_strategy_bundle(request)
+    indicator_cache = None
+    if universe_type == "stock":
+        indicator_cache = make_indicator_cache(config, source, adjust_mode_label)
+
+    global _SIGNAL_WORKER_CONTEXT
+    _SIGNAL_WORKER_CONTEXT = {
+        "strategies": strategies,
+        "signal_engine": SignalEngine(),
+        "min_data_length": min_data_length,
+        "signal_weights": list(request.signal_weights or []),
+        "signal_combination": request.signal_combination,
+        "signal_threshold": request.signal_threshold,
+        "indicator_cache": indicator_cache,
+    }
+
+
+def _generate_symbol_signal(
+    index: int,
+    symbol: str,
+    source_df: pd.DataFrame,
+    strategies: List[object],
+    signal_engine: SignalEngine,
+    min_data_length: int,
+    signal_weights: List[float],
+    signal_combination: str,
+    signal_threshold: float,
+    indicator_cache: Optional[IndicatorCache],
+) -> Tuple[int, str, pd.DataFrame]:
+    """Generate one symbol's signal data with isolated input data."""
+    df = source_df.copy()
+    if len(df) < min_data_length:
+        df["signal"] = np.nan
+    else:
+        df = apply_signals_to_dataframe(
+            df=df,
+            strategies=strategies,
+            signal_engine=signal_engine,
+            signal_weights=signal_weights,
+            signal_combination=signal_combination,
+            signal_threshold=signal_threshold,
+            symbol=symbol,
+            indicator_cache=indicator_cache,
+        )
+        attach_indicator_cache_to_strategies(strategies, indicator_cache, symbol)
+    return index, symbol, df
+
+
+def _generate_symbol_signal_in_worker(
+    index: int,
+    symbol: str,
+    source_df: pd.DataFrame,
+) -> Tuple[int, str, pd.DataFrame]:
+    """Run one symbol task using process-local signal worker state."""
+    if not _SIGNAL_WORKER_CONTEXT:
+        raise RuntimeError("Signal worker is not initialized.")
+
+    return _generate_symbol_signal(
+        index=index,
+        symbol=symbol,
+        source_df=source_df,
+        strategies=_SIGNAL_WORKER_CONTEXT["strategies"],
+        signal_engine=_SIGNAL_WORKER_CONTEXT["signal_engine"],
+        min_data_length=_SIGNAL_WORKER_CONTEXT["min_data_length"],
+        signal_weights=_SIGNAL_WORKER_CONTEXT["signal_weights"],
+        signal_combination=_SIGNAL_WORKER_CONTEXT["signal_combination"],
+        signal_threshold=_SIGNAL_WORKER_CONTEXT["signal_threshold"],
+        indicator_cache=_SIGNAL_WORKER_CONTEXT["indicator_cache"],
+    )
+
+
 def load_market_data(
     request: BacktestRequest,
     progress_callback: Optional[Callable[[int, int, str], None]] = None,
@@ -457,25 +540,55 @@ def generate_signals(
     total = len(loaded_data.data)
     if progress_callback is not None:
         progress_callback(0, total, "Starting signal generation...")
-    for index, (symbol, source_df) in enumerate(loaded_data.data.items(), 1):
-        df = source_df.copy()
-        if len(df) < min_data_length:
-            df["signal"] = np.nan
-        else:
-            df = apply_signals_to_dataframe(
-                df=df,
+
+    signal_workers = max(1, int(resolved.signal_workers))
+    if signal_workers > 1 and total > 1:
+        completed_results: Dict[int, Tuple[str, pd.DataFrame]] = {}
+        with ProcessPoolExecutor(
+            max_workers=signal_workers,
+            initializer=_initialize_signal_worker,
+            initargs=(
+                resolved,
+                config,
+                loaded_data.source,
+                loaded_data.adjust_mode_label,
+                loaded_data.universe_type,
+            ),
+        ) as executor:
+            futures = {
+                executor.submit(_generate_symbol_signal_in_worker, index, symbol, source_df): (index, symbol)
+                for index, (symbol, source_df) in enumerate(loaded_data.data.items(), 1)
+            }
+            for completed, future in enumerate(as_completed(futures), 1):
+                _, expected_symbol = futures[future]
+                try:
+                    result_index, symbol, df = future.result()
+                except Exception as exc:
+                    raise RuntimeError(f"Failed to generate signal for {expected_symbol}") from exc
+                completed_results[result_index] = (symbol, df)
+                if progress_callback is not None:
+                    progress_callback(completed, total, f"Generated signal for {symbol}")
+
+        for index in range(1, total + 1):
+            symbol, df = completed_results[index]
+            signaled_data[symbol] = df
+    else:
+        for index, (symbol, source_df) in enumerate(loaded_data.data.items(), 1):
+            _, _, df = _generate_symbol_signal(
+                index=index,
+                symbol=symbol,
+                source_df=source_df,
                 strategies=strategies,
                 signal_engine=signal_engine,
+                min_data_length=min_data_length,
                 signal_weights=list(resolved.signal_weights or []),
                 signal_combination=resolved.signal_combination,
                 signal_threshold=resolved.signal_threshold,
-                symbol=symbol,
                 indicator_cache=indicator_cache,
             )
-            attach_indicator_cache_to_strategies(strategies, indicator_cache, symbol)
-        signaled_data[symbol] = df
-        if progress_callback is not None:
-            progress_callback(index, total, f"Generated signal for {symbol}")
+            signaled_data[symbol] = df
+            if progress_callback is not None:
+                progress_callback(index, total, f"Generated signal for {symbol}")
 
     return signaled_data
 
