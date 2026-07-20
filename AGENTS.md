@@ -153,6 +153,7 @@ pytest -q
 - 修改策略时，同步检查 `config/strategies.yaml`
 - 修改指标时，同步检查 `tests/test_indicators.py`
 - 修改回测导出逻辑时，同步检查 `app_backtest.py` 对文件名模式的假设
+- 新增或修改 Streamlit 页面时，使用 `width="stretch"` 或 `width="content"`，不要使用将被移除的 `use_container_width` 参数
 - 默认从仓库根目录运行脚本，很多相对路径都是按根目录写的
 
 ## 非源码目录说明
