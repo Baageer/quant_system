@@ -6,7 +6,7 @@ data:
   source: tushare
   adjust_mode: ''
   raw_price_adjust: hfq
-  stock_file: ./data/ZZ_1000.txt
+  stock_file: ./data/HS300.txt
   cache_dir: ./data/raw
   processed_dir: ./data/processed
 indicator_cache:
@@ -23,7 +23,7 @@ backtest:
   stamp_duty_rate: 0.0005
   trade_constraints:
     enforce_lot_size: true
-    lot_size: 1
+    lot_size: 100
     enable_t1: true
     block_suspended: true
     block_limit_up: true

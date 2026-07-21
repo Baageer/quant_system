@@ -59,9 +59,9 @@ timing_strategies:
       slow_period: 26
       signal_period: 9
       mode: cross
-      use_trend_filter: false
+      use_trend_filter: true
       trend_window: 60
-      trend_slope_window: 3
+      trend_slope_window: 7
       use_volume_filter: true
       volume_window: 20
       volume_multiplier: 1.2

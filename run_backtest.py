@@ -26,6 +26,11 @@ from backtest.metrics import calculate_max_drawdown, calculate_sharpe_ratio
 from backtest.performance import PerformanceAnalyzer
 from data.data_api import DataAPI
 from data.indicator_cache import IndicatorCache
+from research.market_regime.labeler import MarketRegimeLabeler
+from research.market_regime.trade_quality import (
+    build_regime_quality_report,
+    export_regime_quality_report,
+)
 from signals.signal_engine import SignalEngine
 from signals.strategy_loader import StrategyLoader
 from utils.logger import setup_logger
@@ -797,16 +802,19 @@ def run_backtest(
     max_position = position_counts.max()
 
     trades = engine.get_trades()
-    if len(trades) == 0:
-        logger.info("No trade records generated")
-        return results
+    output_dir = "./output"
+    os.makedirs(output_dir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    strategy_name_str = "_".join(strategy_names) if len(strategy_names) > 1 else strategy_names[0]
+    results_file = f"{output_dir}/backtest_{strategy_name_str}_{timestamp}.csv"
+    trades_file = f"{output_dir}/trades_{strategy_name_str}_{timestamp}.csv"
 
-    filled_trades = trades
-    if "status" in trades.columns:
+    filled_trades = trades.copy()
+    if not trades.empty and "status" in trades.columns:
         filled_trades = trades[trades["status"] == "filled"].copy()
 
-    total_trades = len(filled_trades[filled_trades["action"] == "buy"])
-    total_trades_done = len(filled_trades[filled_trades["action"] == "sell"])
+    total_trades = len(filled_trades[filled_trades["action"] == "buy"]) if "action" in filled_trades.columns else 0
+    total_trades_done = len(filled_trades[filled_trades["action"] == "sell"]) if "action" in filled_trades.columns else 0
     win_trades = len(filled_trades[filled_trades["profit"] > 0]) if "profit" in filled_trades.columns else 0
     win_rate = (win_trades / total_trades_done * 100) if total_trades_done > 0 else 0
 
@@ -887,16 +895,43 @@ def run_backtest(
                     f"{profit_str} | {reason_str}"
                 )
 
-    output_dir = "./output"
-    os.makedirs(output_dir, exist_ok=True)
+    results.to_csv(results_file, encoding="utf-8-sig")
+    trades.to_csv(trades_file, index=False, encoding="utf-8-sig")
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    strategy_name_str = "_".join(strategy_names) if len(strategy_names) > 1 else strategy_names[0]
-    results_file = f"{output_dir}/backtest_{strategy_name_str}_{timestamp}.csv"
-    trades_file = f"{output_dir}/trades_{strategy_name_str}_{timestamp}.csv"
+    try:
+        total_quality_steps = len(data) + 12
+        logger.info("Starting regime quality analysis (%d steps)...", total_quality_steps)
+        with tqdm(total=total_quality_steps, desc="Regime quality", unit="step", disable=False) as quality_progress:
+            def report_progress(step_name):
+                quality_progress.set_postfix_str(step_name)
+                quality_progress.update(1)
+                if not step_name.startswith("生成 "):
+                    logger.info("Regime quality | %s", step_name)
 
-    # results.to_csv(results_file)
-    trades.to_csv(trades_file)
+            regime_report = build_regime_quality_report(
+                results=results,
+                market_data=data,
+                labeler=MarketRegimeLabeler(),
+                trades=trades,
+                progress_callback=report_progress,
+            )
+            quality_paths = export_regime_quality_report(
+                regime_report,
+                output_dir,
+                "{}_{}".format(strategy_name_str, timestamp),
+                progress_callback=report_progress,
+            )
+        summary = dict(zip(regime_report["summary"]["metric"], regime_report["summary"]["value"]))
+        logger.info(
+            "Regime quality | up coverage: %.2f%% | down exposure: %.2f%% | sideways trades: %d",
+            summary.get("up_coverage_rate", np.nan) * 100,
+            summary.get("down_exposure_rate", np.nan) * 100,
+            int(summary.get("sideways_trade_count", 0)),
+        )
+        logger.info("  Daily positions: %s", quality_paths["daily_positions"])
+        logger.info("  Regime quality summary: %s", quality_paths["summary"])
+    except Exception as exc:
+        logger.warning("Regime quality export skipped: %s", exc)
 
     logger.info("\nResults saved")
     logger.info(f"  Backtest results: {results_file}")
