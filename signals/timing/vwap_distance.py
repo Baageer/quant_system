@@ -82,15 +82,15 @@ def vwap_distance_signal(
                 elif current_dist >= threshold:
                     current_pos = -1
             elif current_pos == 1:
-                if current_dist >= 0:
-                    current_pos = 0
-                elif current_dist >= threshold:
+                if current_dist >= threshold:
                     current_pos = -1
-            else:  # current_pos == -1
-                if current_dist <= 0:
+                elif current_dist >= 0:
                     current_pos = 0
-                elif current_dist <= -threshold:
+            else:  # current_pos == -1
+                if current_dist <= -threshold:
                     current_pos = 1
+                elif current_dist <= 0:
+                    current_pos = 0
         else:
             # 正向逻辑：VWAP 距离越大，预期收益越高
             if current_pos == 0:
@@ -99,15 +99,15 @@ def vwap_distance_signal(
                 elif current_dist <= -threshold:
                     current_pos = -1
             elif current_pos == 1:
-                if current_dist <= 0:
-                    current_pos = 0
-                elif current_dist <= -threshold:
+                if current_dist <= -threshold:
                     current_pos = -1
-            else:  # current_pos == -1
-                if current_dist >= 0:
+                elif current_dist <= 0:
                     current_pos = 0
-                elif current_dist >= threshold:
+            else:  # current_pos == -1
+                if current_dist >= threshold:
                     current_pos = 1
+                elif current_dist >= 0:
+                    current_pos = 0
 
         position.iloc[i] = current_pos
 

@@ -8,6 +8,13 @@ import glob
 from datetime import datetime
 from typing import Tuple, List, Dict, Optional
 
+from backtest.charting import (
+    CandlestickChartSettings,
+    build_candlestick_chart,
+    render_candlestick_chart,
+    render_candlestick_chart_controls,
+)
+
 
 def load_backtest_files() -> Tuple[List[str], List[str]]:
     trades_files = sorted(glob.glob('./output/trades_*.csv'))
@@ -169,95 +176,16 @@ def plot_portfolio_value(backtest_df: pd.DataFrame) -> go.Figure:
 def plot_candlestick_with_signals(
     price_df: pd.DataFrame, 
     trades_df: pd.DataFrame,
-    symbol: str
+    symbol: str,
+    settings: Optional[CandlestickChartSettings] = None,
 ) -> go.Figure:
-    fig = make_subplots(
-        rows=2, cols=1,
-        row_heights=[0.7, 0.3],
-        vertical_spacing=0.1,
-        subplot_titles=(f'{symbol} K线图', '成交量')
+    return build_candlestick_chart(
+        price_data=price_df,
+        trades=trades_df,
+        symbol=symbol,
+        settings=settings,
+        ui_revision=f"backtest-candlestick-{symbol}",
     )
-    
-    fig.add_trace(
-        go.Candlestick(
-            x=price_df['date'],
-            open=price_df['open'],
-            high=price_df['high'],
-            low=price_df['low'],
-            close=price_df['close'],
-            name='K线',
-            increasing_line_color='#EF476F',
-            decreasing_line_color='#06D6A0'
-        ),
-        row=1, col=1
-    )
-    
-    symbol_trades = trades_df[trades_df['symbol'] == symbol]
-    
-    buy_trades = symbol_trades[symbol_trades['action'] == 'buy']
-    sell_trades = symbol_trades[symbol_trades['action'] == 'sell']
-    
-    if not buy_trades.empty:
-        fig.add_trace(
-            go.Scatter(
-                x=buy_trades['date'],
-                y=buy_trades['price'],
-                mode='markers',
-                name='买入',
-                marker=dict(
-                    symbol='triangle-up',
-                    size=15,
-                    color='#FF6B6B',
-                    line=dict(width=2, color='DarkSlateGrey')
-                ),
-                text=[f'买入: {p:.2f}' for p in buy_trades['price']],
-                hoverinfo='text+x'
-            ),
-            row=1, col=1
-        )
-    
-    if not sell_trades.empty:
-        fig.add_trace(
-            go.Scatter(
-                x=sell_trades['date'],
-                y=sell_trades['price'],
-                mode='markers',
-                name='卖出',
-                marker=dict(
-                    symbol='triangle-down',
-                    size=15,
-                    color='#4ECDC4',
-                    line=dict(width=2, color='DarkSlateGrey')
-                ),
-                text=[f'卖出: {p:.2f}' for p in sell_trades['price']],
-                hoverinfo='text+x'
-            ),
-            row=1, col=1
-        )
-    
-    fig.add_trace(
-        go.Bar(
-            x=price_df['date'],
-            y=price_df['volume'],
-            name='成交量',
-            marker_color='#95E1D3'
-        ),
-        row=2, col=1
-    )
-    
-    fig.update_layout(
-        height=700,
-        showlegend=True,
-        hovermode='x unified',
-        template='plotly_white',
-        xaxis_rangeslider_visible=False
-    )
-    
-    fig.update_xaxes(title_text="日期", row=2, col=1)
-    fig.update_yaxes(title_text="价格", row=1, col=1)
-    fig.update_yaxes(title_text="成交量", row=2, col=1)
-    
-    return fig
 
 
 def display_trades_table(trades_df: pd.DataFrame):
@@ -376,8 +304,24 @@ def main():
         price_df = load_stock_price_data(selected_symbol, start_date, end_date)
         
         if price_df is not None and not price_df.empty:
-            candlestick_fig = plot_candlestick_with_signals(price_df, trades_df, selected_symbol)
-            st.plotly_chart(candlestick_fig, width='stretch')
+            chart_settings = render_candlestick_chart_controls(
+                key_prefix="backtest_candlestick",
+            )
+            try:
+                candlestick_fig = plot_candlestick_with_signals(
+                    price_df,
+                    trades_df,
+                    selected_symbol,
+                    settings=chart_settings,
+                )
+            except ValueError as error:
+                st.error(f"K线图生成失败：{error}")
+            else:
+                render_candlestick_chart(
+                    candlestick_fig,
+                    settings=chart_settings,
+                    state_key=f"backtest_candlestick_chart_{selected_symbol}",
+                )
         else:
             st.warning(f"无法加载股票 {selected_symbol} 的价格数据")
     else:
