@@ -18,6 +18,7 @@ from typing import Dict, Iterable, Mapping, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
+from tqdm.auto import tqdm
 
 from factors.factor_panel import AVAILABLE_FACTOR_SPECS, calculate_single_stock_factors
 from signals.indicators import sma, volatility
@@ -105,6 +106,7 @@ def build_causal_feature_panel(
     stock_data: Mapping[str, pd.DataFrame],
     factor_names: Optional[Iterable[str]] = None,
     feature_limit: Optional[int] = None,
+    show_progress: bool = False,
 ) -> pd.DataFrame:
     """Build a ``date, symbol`` panel without future-derived feature fields.
 
@@ -120,7 +122,13 @@ def build_causal_feature_panel(
     names = tuple(DEFAULT_FACTOR_NAMES if factor_names is None else factor_names)
     frames = []
     required = {"high", "low", "close", "volume"}
-    for symbol, raw_data in stock_data.items():
+    for symbol, raw_data in tqdm(
+        stock_data.items(),
+        total=len(stock_data),
+        desc="构建因果特征面板",
+        unit="标的",
+        disable=not show_progress,
+    ):
         missing = required.difference(raw_data.columns)
         if missing:
             raise ValueError("{} is missing OHLCV columns: {}".format(symbol, sorted(missing)))
@@ -173,14 +181,22 @@ def audit_feature_causality(
 
 
 def build_turning_point_events(
-    stock_data: Mapping[str, pd.DataFrame], labeler: Optional[MarketRegimeLabeler] = None
+    stock_data: Mapping[str, pd.DataFrame],
+    labeler: Optional[MarketRegimeLabeler] = None,
+    show_progress: bool = False,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Create closed offline state-transition events, separate from features."""
 
     regime_labeler = labeler or MarketRegimeLabeler()
     event_frames = []
     skipped = []
-    for symbol, data in stock_data.items():
+    for symbol, data in tqdm(
+        stock_data.items(),
+        total=len(stock_data),
+        desc="生成离线趋势事件",
+        unit="标的",
+        disable=not show_progress,
+    ):
         try:
             segments, _, pivots = regime_labeler.label(data.sort_index(), str(symbol))
         except ValueError as exc:
@@ -219,9 +235,16 @@ def _event_window_observations(
     pre_window: int,
     post_window: int,
     sample_group: str,
+    show_progress: bool = False,
 ) -> pd.DataFrame:
     rows = []
-    for event in events.itertuples(index=False):
+    for event in tqdm(
+        events.itertuples(index=False),
+        total=len(events),
+        desc="导出{}原始观察".format(sample_group),
+        unit="事件",
+        disable=not show_progress,
+    ):
         try:
             symbol_panel = panel.xs(str(event.symbol), level="symbol")
         except KeyError:
@@ -263,6 +286,7 @@ def match_non_event_controls(
     events: pd.DataFrame,
     match_features: Sequence[str] = DEFAULT_MATCH_FEATURES,
     exclusion_days: int = 20,
+    show_progress: bool = False,
 ) -> pd.DataFrame:
     """Match one same-symbol, same-year non-event day to each event.
 
@@ -274,7 +298,13 @@ def match_non_event_controls(
     if not available or events.empty:
         return pd.DataFrame(columns=["event_id", "symbol", "transition", "event_date", "control_date", "match_distance"])
     rows = []
-    for event in events.itertuples(index=False):
+    for event in tqdm(
+        events.itertuples(index=False),
+        total=len(events),
+        desc="匹配非事件对照组",
+        unit="事件",
+        disable=not show_progress,
+    ):
         try:
             symbol_panel = panel.xs(str(event.symbol), level="symbol")
         except KeyError:
@@ -325,6 +355,14 @@ def summarize_turning_point_features(observations: pd.DataFrame) -> Tuple[pd.Dat
             "std": grouped.std(),
         }
     ).reset_index()
+    return summary, _effects_from_summary(summary)
+
+
+def _effects_from_summary(summary: pd.DataFrame) -> pd.DataFrame:
+    """Join compact event/control summaries into standardized effects."""
+
+    if summary.empty:
+        return pd.DataFrame()
     event_summary = summary[summary["sample_group"] == "event"].set_index(["transition", "feature", "relative_day"])
     control_summary = summary[summary["sample_group"] == "control"].set_index(["transition", "feature", "relative_day"])
     effect = event_summary.join(control_summary, lsuffix="_event", rsuffix="_control", how="inner").reset_index()
@@ -332,7 +370,94 @@ def summarize_turning_point_features(observations: pd.DataFrame) -> Tuple[pd.Dat
     effect["mean_difference"] = effect["mean_event"] - effect["mean_control"]
     effect["median_difference"] = effect["median_event"] - effect["median_control"]
     effect["standardized_effect"] = effect["mean_difference"] / pooled_std
-    return summary, effect
+    return effect
+
+
+def summarize_event_windows_compact(
+    panel: pd.DataFrame,
+    events: pd.DataFrame,
+    controls: pd.DataFrame,
+    feature_columns: Sequence[str],
+    pre_window: int,
+    post_window: int,
+    show_progress: bool = False,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Summarize event paths without materializing a feature-long observation table.
+
+    Only one ``event count × feature count`` matrix is held at a time.  This
+    replaces the former ``event × day × feature`` rows containing repeated
+    symbol/date strings, which are prohibitively large for HS300 research.
+    """
+
+    panel_lookup = {}
+    for symbol, symbol_panel in tqdm(
+        panel.groupby(level="symbol", sort=False),
+        total=panel.index.get_level_values("symbol").nunique(),
+        desc="整理事件窗口索引",
+        unit="标的",
+        disable=not show_progress,
+    ):
+        dates = pd.DatetimeIndex(symbol_panel.index.get_level_values("date"))
+        panel_lookup[str(symbol)] = {
+            "positions": {pd.Timestamp(date): position for position, date in enumerate(dates)},
+            "values": np.asarray(symbol_panel.loc[:, feature_columns], dtype=float),
+        }
+    sample_specs = [("event", events, "event_date")]
+    if not controls.empty:
+        sample_specs.append(("control", controls, "control_date"))
+    rows = []
+    total_windows = sum(
+        sample_events["transition"].nunique() * (pre_window + post_window + 1)
+        for _, sample_events, _ in sample_specs
+        if not sample_events.empty
+    )
+    with tqdm(
+        total=total_windows,
+        desc="汇总事件特征窗口",
+        unit="窗口",
+        disable=not show_progress,
+    ) as progress:
+        for sample_group, sample_events, date_column in sample_specs:
+            if sample_events.empty:
+                continue
+            for transition, transition_events in sample_events.groupby("transition", sort=False):
+                event_records = list(transition_events.itertuples(index=False))
+                for relative_day in range(-pre_window, post_window + 1):
+                    progress.update(1)
+                    vectors = []
+                    for event in event_records:
+                        lookup = panel_lookup.get(str(event.symbol))
+                        event_date = pd.Timestamp(getattr(event, date_column))
+                        if lookup is None or event_date not in lookup["positions"]:
+                            continue
+                        position = lookup["positions"][event_date] + relative_day
+                        if 0 <= position < len(lookup["values"]):
+                            vectors.append(lookup["values"][position])
+                    if not vectors:
+                        continue
+                    matrix = np.asarray(vectors, dtype=float)
+                    for feature_position, feature in enumerate(feature_columns):
+                        values = matrix[:, feature_position]
+                        values = values[np.isfinite(values)]
+                        if not len(values):
+                            continue
+                        rows.append(
+                            {
+                                "transition": transition,
+                                "sample_group": sample_group,
+                                "feature": feature,
+                                "relative_day": relative_day,
+                                "count": int(len(values)),
+                                "mean": float(np.mean(values)),
+                                "median": float(np.median(values)),
+                                "q25": float(np.percentile(values, 25)),
+                                "q75": float(np.percentile(values, 75)),
+                                "std": float(np.std(values, ddof=1)) if len(values) > 1 else np.nan,
+                            }
+                        )
+    summary_columns = ["transition", "sample_group", "feature", "relative_day", "count", "mean", "median", "q25", "q75", "std"]
+    summary = pd.DataFrame(rows, columns=summary_columns)
+    return summary, _effects_from_summary(summary)
 
 
 def build_turning_point_feature_study(
@@ -342,18 +467,34 @@ def build_turning_point_feature_study(
     pre_window: int = 60,
     post_window: int = 20,
     feature_limit: Optional[int] = None,
+    candidate_selection_end: Optional[str] = "2018-12-31",
+    export_observations: bool = False,
+    show_progress: bool = False,
 ) -> Dict[str, pd.DataFrame]:
     """Build the causal panel, offline events, matched controls and summaries."""
 
-    panel = build_causal_feature_panel(stock_data, factor_names, feature_limit)
-    events, skipped = build_turning_point_events(stock_data, labeler)
+    panel = build_causal_feature_panel(stock_data, factor_names, feature_limit, show_progress)
+    events, skipped = build_turning_point_events(stock_data, labeler, show_progress)
     feature_columns = list(panel.columns)
-    event_observations = _event_window_observations(panel, events, feature_columns, pre_window, post_window, "event")
-    controls = match_non_event_controls(panel, events)
+    controls = match_non_event_controls(panel, events, show_progress=show_progress)
     control_events = events.merge(controls.loc[:, ["event_id", "control_date", "match_distance"]], on="event_id", how="inner") if not controls.empty else events.iloc[0:0].copy()
-    control_observations = _event_window_observations(panel, control_events, feature_columns, pre_window, post_window, "control")
-    observations = pd.concat([event_observations, control_observations], ignore_index=True)
-    summary, effects = summarize_turning_point_features(observations)
+    summary, effects = summarize_event_windows_compact(
+        panel, events, control_events, feature_columns, pre_window, post_window, show_progress
+    )
+    candidate_events = events
+    candidate_controls = control_events
+    if candidate_selection_end:
+        cutoff = pd.Timestamp(candidate_selection_end)
+        candidate_events = events[pd.to_datetime(events["event_date"]) <= cutoff].copy()
+        candidate_controls = control_events[pd.to_datetime(control_events["event_date"]) <= cutoff].copy()
+    candidate_summary, candidate_effects = summarize_event_windows_compact(
+        panel, candidate_events, candidate_controls, feature_columns, 20, -1, show_progress
+    )
+    observations = None
+    if export_observations:
+        event_observations = _event_window_observations(panel, events, feature_columns, pre_window, post_window, "event", show_progress)
+        control_observations = _event_window_observations(panel, control_events, feature_columns, pre_window, post_window, "control", show_progress)
+        observations = pd.concat([event_observations, control_observations], ignore_index=True)
     return {
         "feature_panel": panel.reset_index(),
         "events": events,
@@ -361,6 +502,9 @@ def build_turning_point_feature_study(
         "event_observations": observations,
         "feature_path_summary": summary,
         "feature_effects": effects,
+        "training_feature_summary": candidate_summary,
+        "training_feature_effects": candidate_effects,
+        "candidate_selection_end": candidate_selection_end,
         "skipped_symbols": skipped,
     }
 
@@ -375,11 +519,14 @@ def export_turning_point_feature_study(report: Mapping[str, pd.DataFrame], outpu
         "feature_panel": "trend_feature_panel",
         "events": "trend_turning_point_events",
         "matched_controls": "trend_matched_controls",
-        "event_observations": "trend_feature_event_observations",
         "feature_path_summary": "trend_feature_event_summary",
         "feature_effects": "trend_feature_event_effects",
+        "training_feature_summary": "trend_feature_training_summary",
+        "training_feature_effects": "trend_feature_training_effects",
         "skipped_symbols": "trend_feature_study_skipped_symbols",
     }
+    if report.get("event_observations") is not None:
+        names["event_observations"] = "trend_feature_event_observations"
     paths = {}
     for key, prefix in names.items():
         path = destination / "{}_{}.csv".format(prefix, identifier)
@@ -393,6 +540,8 @@ def export_turning_point_feature_study(report: Mapping[str, pd.DataFrame], outpu
         "feature_count": int(len(report.get("feature_panel", pd.DataFrame()).columns) - 2),
         "event_count": int(len(report.get("events", pd.DataFrame()))),
         "matched_control_count": int(len(report.get("matched_controls", pd.DataFrame()))),
+        "raw_event_observations_exported": report.get("event_observations") is not None,
+        "candidate_selection_end": report.get("candidate_selection_end"),
         "paths": {key: str(path) for key, path in paths.items()},
     }
     manifest_path = destination / "trend_feature_study_manifest_{}.json".format(identifier)
@@ -401,10 +550,12 @@ def export_turning_point_feature_study(report: Mapping[str, pd.DataFrame], outpu
     return paths
 
 
-def _load_stock_data(symbols: Sequence[str], price_history_dir: Optional[str], adjustment: str) -> Tuple[Dict[str, pd.DataFrame], pd.DataFrame]:
+def _load_stock_data(
+    symbols: Sequence[str], price_history_dir: Optional[str], adjustment: str, show_progress: bool = False
+) -> Tuple[Dict[str, pd.DataFrame], pd.DataFrame]:
     loaded = {}
     skipped = []
-    for symbol in symbols:
+    for symbol in tqdm(symbols, desc="加载本地行情", unit="标的", disable=not show_progress):
         try:
             loaded[str(symbol)] = load_local_price_history(symbol, price_history_dir, adjustment)
         except (FileNotFoundError, ValueError) as exc:
@@ -422,6 +573,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--pre-window", type=int, default=60)
     parser.add_argument("--post-window", type=int, default=20)
+    parser.add_argument("--candidate-selection-end", default="2018-12-31")
+    parser.add_argument("--export-observations", action="store_true", help="Export raw event observations; can require multiple GB")
+    parser.add_argument("--no-progress", action="store_true", help="Disable tqdm progress bars")
     parser.add_argument(
         "--feature-limit",
         type=int,
@@ -432,12 +586,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     symbols = args.symbols or load_hs300_symbols()
     if args.limit is not None:
         symbols = symbols[: args.limit]
-    stock_data, loading_skips = _load_stock_data(symbols, args.price_history_dir, args.adjustment)
+    show_progress = not args.no_progress
+    stock_data, loading_skips = _load_stock_data(symbols, args.price_history_dir, args.adjustment, show_progress)
     report = build_turning_point_feature_study(
         stock_data,
         feature_limit=args.feature_limit,
         pre_window=args.pre_window,
         post_window=args.post_window,
+        candidate_selection_end=args.candidate_selection_end,
+        export_observations=args.export_observations,
+        show_progress=show_progress,
     )
     report["skipped_symbols"] = pd.concat([loading_skips, report["skipped_symbols"]], ignore_index=True)
     paths = export_turning_point_feature_study(report, args.output_dir, args.run_id)

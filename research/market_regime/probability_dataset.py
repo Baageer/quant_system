@@ -19,8 +19,9 @@ from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Uni
 
 import numpy as np
 import pandas as pd
+from tqdm.auto import tqdm
 
-from .feature_event_study import summarize_turning_point_features
+from .feature_event_study import _effects_from_summary, summarize_turning_point_features
 
 
 DEFAULT_TRAIN_END = "2018-12-31"
@@ -81,6 +82,7 @@ def build_future_trend_samples(
     turning_point_events: pd.DataFrame,
     horizon: int = DEFAULT_HORIZON,
     min_event_confidence: float = 0.0,
+    show_progress: bool = False,
 ) -> pd.DataFrame:
     """Label each sample as the first up/down event in ``(t, t + H]``.
 
@@ -94,7 +96,13 @@ def build_future_trend_samples(
     panel = _normalize_panel(feature_panel)
     events = _normalize_events(turning_point_events, min_event_confidence)
     parts = []
-    for symbol, symbol_panel in panel.groupby("symbol", sort=False):
+    for symbol, symbol_panel in tqdm(
+        panel.groupby("symbol", sort=False),
+        total=panel["symbol"].nunique(),
+        desc="构建未来趋势标签",
+        unit="标的",
+        disable=not show_progress,
+    ):
         data = symbol_panel.copy().reset_index(drop=True)
         dates = pd.DatetimeIndex(data["date"])
         symbol_events = events[events["symbol"] == str(symbol)]
@@ -160,6 +168,7 @@ def split_time_series_samples(
     validation_end: Union[str, pd.Timestamp] = DEFAULT_VALIDATION_END,
     test_start: Union[str, pd.Timestamp] = DEFAULT_TEST_START,
     embargo_days: int = DEFAULT_EMBARGO_DAYS,
+    show_progress: bool = False,
 ) -> pd.DataFrame:
     """Assign train/validation/test partitions with label purge and embargo.
 
@@ -185,7 +194,14 @@ def split_time_series_samples(
 
     result.loc[result["target"] == "unavailable", "split_reason"] = "label_unavailable"
     usable = result["target"] != "unavailable"
-    for symbol, indices in result.groupby("symbol", sort=False).groups.items():
+    symbol_groups = result.groupby("symbol", sort=False).groups
+    for symbol, indices in tqdm(
+        symbol_groups.items(),
+        total=len(symbol_groups),
+        desc="执行时间切分与隔离",
+        unit="标的",
+        disable=not show_progress,
+    ):
         index = list(indices)
         dates = pd.DatetimeIndex(result.loc[index, "date"])
         validation_embargo_end = _embargo_start_date(dates, validation_start_date, embargo_days)
@@ -228,6 +244,7 @@ def select_event_study_candidates(
     min_relative_days: int = 5,
     min_abs_effect: float = 0.20,
     min_direction_consistency: float = 0.60,
+    show_progress: bool = False,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Select features using only pre-event, pre-validation event evidence.
 
@@ -250,13 +267,47 @@ def select_event_study_candidates(
         & (input_rows["relative_day"] <= pre_event_end)
     ].copy()
     _, effects = summarize_turning_point_features(input_rows)
+    return select_candidate_features_from_effects(
+        effects,
+        pre_event_start=pre_event_start,
+        pre_event_end=pre_event_end,
+        min_samples_per_day=min_samples_per_day,
+        min_relative_days=min_relative_days,
+        min_abs_effect=min_abs_effect,
+        min_direction_consistency=min_direction_consistency,
+        show_progress=show_progress,
+    )
+
+
+def select_candidate_features_from_effects(
+    effects: pd.DataFrame,
+    pre_event_start: int = -20,
+    pre_event_end: int = -1,
+    min_samples_per_day: int = 10,
+    min_relative_days: int = 5,
+    min_abs_effect: float = 0.20,
+    min_direction_consistency: float = 0.60,
+    show_progress: bool = False,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """Select candidate features from compact, already time-filtered effects."""
+
     if effects.empty:
         return pd.DataFrame(), pd.DataFrame(columns=["feature", "selected"])
+    effects = effects[
+        (effects["relative_day"] >= pre_event_start) & (effects["relative_day"] <= pre_event_end)
+    ].copy()
     effects = effects[effects["transition"].str.endswith(("_to_up", "_to_down"))].copy()
     effects["target"] = np.where(effects["transition"].str.endswith("_to_up"), "up", "down")
     effects["usable_day"] = (effects["count_event"] >= min_samples_per_day) & (effects["count_control"] >= min_samples_per_day)
     rows = []
-    for (target, transition, feature), group in effects.groupby(["target", "transition", "feature"]):
+    effect_groups = effects.groupby(["target", "transition", "feature"])
+    for (target, transition, feature), group in tqdm(
+        effect_groups,
+        total=effect_groups.ngroups,
+        desc="按事件效应筛选特征",
+        unit="特征组",
+        disable=not show_progress,
+    ):
         usable = group[group["usable_day"] & group["standardized_effect"].notnull()]
         effect_values = np.asarray(usable["standardized_effect"], dtype=float)
         mean_effect = float(np.mean(effect_values)) if len(effect_values) else np.nan
@@ -286,7 +337,14 @@ def select_event_study_candidates(
     detail = pd.DataFrame(rows).sort_values(["selected", "mean_abs_standardized_effect"], ascending=[False, False])
     selected = detail[detail["selected"]].copy()
     candidate_rows = []
-    for feature, group in selected.groupby("feature"):
+    selected_groups = selected.groupby("feature")
+    for feature, group in tqdm(
+        selected_groups,
+        total=selected_groups.ngroups,
+        desc="汇总事件候选特征",
+        unit="特征",
+        disable=not show_progress,
+    ):
         candidate_rows.append(
             {
                 "feature": feature,
@@ -316,6 +374,7 @@ def prune_correlated_candidates(
     train_samples: pd.DataFrame,
     max_candidates: int = 30,
     correlation_threshold: float = 0.85,
+    show_progress: bool = False,
 ) -> pd.DataFrame:
     """Greedily remove redundant candidates using training-period correlation only."""
 
@@ -331,7 +390,13 @@ def prune_correlated_candidates(
     correlations = train_samples.loc[:, usable_features].apply(pd.to_numeric, errors="coerce").corr().abs()
     selected_features = []
     rows = []
-    for _, row in ranked.iterrows():
+    for _, row in tqdm(
+        ranked.iterrows(),
+        total=len(ranked),
+        desc="训练期相关性去冗余",
+        unit="特征",
+        disable=not show_progress,
+    ):
         output = row.to_dict()
         feature = row["feature"]
         output["selection_rank"] = np.nan
@@ -374,7 +439,8 @@ def apply_candidate_feature_set(samples: pd.DataFrame, candidates: pd.DataFrame)
 def build_dataset_report(
     feature_panel: pd.DataFrame,
     events: pd.DataFrame,
-    event_observations: pd.DataFrame,
+    event_observations: Optional[pd.DataFrame],
+    candidate_feature_effects: Optional[pd.DataFrame] = None,
     horizon: int = DEFAULT_HORIZON,
     min_event_confidence: float = 0.0,
     train_end: Union[str, pd.Timestamp] = DEFAULT_TRAIN_END,
@@ -384,19 +450,26 @@ def build_dataset_report(
     embargo_days: int = DEFAULT_EMBARGO_DAYS,
     max_candidates: int = 30,
     correlation_threshold: float = 0.85,
+    show_progress: bool = False,
 ) -> Dict[str, pd.DataFrame]:
     """Build labelled samples, leakage-controlled splits and candidate reports."""
 
-    samples = build_future_trend_samples(feature_panel, events, horizon, min_event_confidence)
+    samples = build_future_trend_samples(feature_panel, events, horizon, min_event_confidence, show_progress)
     split_samples = split_time_series_samples(
-        samples, train_end, validation_start, validation_end, test_start, embargo_days
+        samples, train_end, validation_start, validation_end, test_start, embargo_days, show_progress
     )
-    candidate_detail, event_candidates = select_event_study_candidates(event_observations, train_end)
+    if candidate_feature_effects is not None and not candidate_feature_effects.empty:
+        candidate_detail, event_candidates = select_candidate_features_from_effects(candidate_feature_effects, show_progress=show_progress)
+    elif event_observations is not None:
+        candidate_detail, event_candidates = select_event_study_candidates(event_observations, train_end, show_progress=show_progress)
+    else:
+        raise ValueError("Need raw event observations or compact training_feature_effects for candidate selection")
     candidates = prune_correlated_candidates(
         event_candidates,
         split_samples[split_samples["split"] == "train"],
         max_candidates=max_candidates,
         correlation_threshold=correlation_threshold,
+        show_progress=show_progress,
     )
     split_summary = (
         split_samples.groupby(["split", "target"])
@@ -429,6 +502,7 @@ def export_dataset_report(
     output_dir: Union[str, Path],
     run_id: Optional[str] = None,
     metadata: Optional[Mapping[str, object]] = None,
+    show_progress: bool = False,
 ) -> Dict[str, Path]:
     """Write model-data tables and a manifest with immutable split settings."""
 
@@ -450,7 +524,13 @@ def export_dataset_report(
         "candidate_features": "trend_probability_candidate_features",
     }
     paths = {}
-    for key, prefix in names.items():
+    for key, prefix in tqdm(
+        names.items(),
+        total=len(names),
+        desc="导出概率模型数据集",
+        unit="文件",
+        disable=not show_progress,
+    ):
         path = destination / "{}_{}.csv".format(prefix, identifier)
         report.get(key, pd.DataFrame()).to_csv(path, index=False, encoding="utf-8-sig")
         paths[key] = path
@@ -472,33 +552,107 @@ def export_dataset_report(
     return paths
 
 
+def _combine_compact_summaries(summary_frames: Sequence[pd.DataFrame], show_progress: bool = False) -> pd.DataFrame:
+    """Pool batch-level means and standard deviations before deriving effects."""
+
+    frames = [frame for frame in summary_frames if frame is not None and not frame.empty]
+    columns = ["transition", "sample_group", "feature", "relative_day", "count", "mean", "median", "q25", "q75", "std"]
+    if not frames:
+        return pd.DataFrame(columns=columns)
+    combined = pd.concat(frames, ignore_index=True)
+    rows = []
+    summary_groups = combined.groupby(["transition", "sample_group", "feature", "relative_day"], sort=False)
+    for keys, group in tqdm(
+        summary_groups,
+        total=summary_groups.ngroups,
+        desc="合并批次训练期汇总",
+        unit="统计组",
+        disable=not show_progress,
+    ):
+        counts = np.asarray(group["count"], dtype=float)
+        means = np.asarray(group["mean"], dtype=float)
+        stds = np.asarray(group["std"], dtype=float)
+        total_count = int(np.sum(counts))
+        mean = float(np.sum(counts * means) / total_count)
+        stds = np.where(np.isfinite(stds), stds, 0.0)
+        within_sum_squares = np.sum(np.maximum(counts - 1, 0) * stds ** 2)
+        between_sum_squares = float(np.sum(counts * (means - mean) ** 2))
+        std = float(np.sqrt((within_sum_squares + between_sum_squares) / (total_count - 1))) if total_count > 1 else np.nan
+        rows.append(
+            {
+                "transition": keys[0],
+                "sample_group": keys[1],
+                "feature": keys[2],
+                "relative_day": keys[3],
+                "count": total_count,
+                "mean": mean,
+                "median": np.nan,
+                "q25": np.nan,
+                "q75": np.nan,
+                "std": std,
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
 def _load_study_tables(
-    output_dir: Union[str, Path], study_run_ids: Union[str, Sequence[str]]
-) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    output_dir: Union[str, Path], study_run_ids: Union[str, Sequence[str]], show_progress: bool = False
+) -> Tuple[pd.DataFrame, pd.DataFrame, Optional[pd.DataFrame], Optional[pd.DataFrame]]:
     """Load and combine one or more independently exported feature-study batches."""
 
     root = Path(output_dir)
     run_ids = [study_run_ids] if isinstance(study_run_ids, str) else list(study_run_ids)
     paths = []
-    for study_run_id in run_ids:
+    for study_run_id in tqdm(
+        run_ids,
+        desc="检查事件研究批次",
+        unit="批次",
+        disable=not show_progress,
+    ):
         paths.extend(
             [
                 root / "trend_feature_panel_{}.csv".format(study_run_id),
                 root / "trend_turning_point_events_{}.csv".format(study_run_id),
-                root / "trend_feature_event_observations_{}.csv".format(study_run_id),
             ]
         )
     missing = [str(path) for path in paths if not path.is_file()]
     if missing:
         raise FileNotFoundError("Missing feature-event study exports: {}".format(missing))
+    compact_summary_paths = [root / "trend_feature_training_summary_{}.csv".format(study_run_id) for study_run_id in run_ids]
+    compact_paths = [root / "trend_feature_training_effects_{}.csv".format(study_run_id) for study_run_id in run_ids]
+    observation_paths = [root / "trend_feature_event_observations_{}.csv".format(study_run_id) for study_run_id in run_ids]
+    use_compact_summary = all(path.is_file() for path in compact_summary_paths)
+    use_compact = all(path.is_file() for path in compact_paths)
+    use_observations = all(path.is_file() for path in observation_paths)
+    if not use_compact_summary and not use_compact and not use_observations:
+        raise FileNotFoundError(
+            "Missing compact training effects and legacy raw observations for study IDs: {}".format(run_ids)
+        )
     panels = []
     events = []
     observations = []
-    for study_run_id in run_ids:
+    compact_effects = []
+    compact_summaries = []
+    for study_run_id in tqdm(
+        run_ids,
+        desc="读取事件研究批次",
+        unit="批次",
+        disable=not show_progress,
+    ):
         panels.append(pd.read_csv(root / "trend_feature_panel_{}.csv".format(study_run_id)))
         events.append(pd.read_csv(root / "trend_turning_point_events_{}.csv".format(study_run_id)))
-        observations.append(pd.read_csv(root / "trend_feature_event_observations_{}.csv".format(study_run_id)))
-    return pd.concat(panels, ignore_index=True), pd.concat(events, ignore_index=True), pd.concat(observations, ignore_index=True)
+        if use_compact_summary:
+            compact_summaries.append(pd.read_csv(root / "trend_feature_training_summary_{}.csv".format(study_run_id)))
+        elif use_compact:
+            compact_effects.append(pd.read_csv(root / "trend_feature_training_effects_{}.csv".format(study_run_id)))
+        else:
+            observations.append(pd.read_csv(root / "trend_feature_event_observations_{}.csv".format(study_run_id)))
+    observation_frame = pd.concat(observations, ignore_index=True) if observations else None
+    if compact_summaries:
+        compact_frame = _effects_from_summary(_combine_compact_summaries(compact_summaries, show_progress))
+    else:
+        compact_frame = pd.concat(compact_effects, ignore_index=True) if compact_effects else None
+    return pd.concat(panels, ignore_index=True), pd.concat(events, ignore_index=True), observation_frame, compact_frame
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -515,12 +669,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--embargo-days", type=int, default=DEFAULT_EMBARGO_DAYS)
     parser.add_argument("--max-candidates", type=int, default=30)
     parser.add_argument("--correlation-threshold", type=float, default=0.85)
+    parser.add_argument("--no-progress", action="store_true", help="Disable tqdm progress bars")
     args = parser.parse_args(argv)
-    panel, events, observations = _load_study_tables(args.output_dir, args.study_run_id)
+    show_progress = not args.no_progress
+    panel, events, observations, compact_effects = _load_study_tables(args.output_dir, args.study_run_id, show_progress)
     report = build_dataset_report(
         panel,
         events,
         observations,
+        candidate_feature_effects=compact_effects,
         horizon=args.horizon,
         min_event_confidence=args.min_event_confidence,
         train_end=args.train_end,
@@ -530,6 +687,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         embargo_days=args.embargo_days,
         max_candidates=args.max_candidates,
         correlation_threshold=args.correlation_threshold,
+        show_progress=show_progress,
     )
     metadata = {
         "source_study_run_ids": args.study_run_id,
@@ -544,7 +702,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "correlation_threshold": args.correlation_threshold,
         "candidate_selection_period": "events through {} only".format(args.train_end),
     }
-    paths = export_dataset_report(report, args.output_dir, args.run_id, metadata)
+    paths = export_dataset_report(report, args.output_dir, args.run_id, metadata, show_progress)
     print("Prepared train/validation/test samples: {}/{}/{}".format(
         len(report["train_samples"]), len(report["validation_samples"]), len(report["test_samples"])
     ))
