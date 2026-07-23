@@ -25,6 +25,12 @@ from backtest.backtest_service import (
     load_yaml_config,
     run_engine_with_signals,
 )
+from backtest.charting import (
+    CandlestickChartSettings,
+    build_candlestick_chart,
+    render_candlestick_chart,
+    render_candlestick_chart_controls,
+)
 
 
 CONFIG_PATH = "./config/settings.yaml"
@@ -332,79 +338,34 @@ def draw_equity_chart(results: pd.DataFrame) -> None:
     st.plotly_chart(fig, width="stretch")
 
 
-def draw_symbol_chart(symbol: str, df: pd.DataFrame, trades: pd.DataFrame) -> None:
+def draw_symbol_chart(
+    symbol: str,
+    df: pd.DataFrame,
+    trades: pd.DataFrame,
+    settings: Optional[CandlestickChartSettings] = None,
+) -> None:
     """Draw one symbol's price, volume, signals, and trades."""
     if df.empty:
         st.info("该标的暂无数据。")
         return
 
-    plot_df = df.copy()
-    if not isinstance(plot_df.index, pd.DatetimeIndex):
-        plot_df.index = pd.to_datetime(plot_df.index)
-
-    fig = make_subplots(
-        rows=3,
-        cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.03,
-        row_heights=[0.62, 0.18, 0.2],
-        subplot_titles=(f"{symbol} K线与交易点", "成交量", "信号"),
-    )
-    fig.add_trace(
-        go.Candlestick(
-            x=plot_df.index,
-            open=plot_df["open"],
-            high=plot_df["high"],
-            low=plot_df["low"],
-            close=plot_df["close"],
-            name="K线",
-        ),
-        row=1,
-        col=1,
-    )
-    fig.add_trace(
-        go.Bar(x=plot_df.index, y=plot_df["volume"], name="成交量"),
-        row=2,
-        col=1,
-    )
-    if "signal" in plot_df.columns:
-        fig.add_trace(
-            go.Scatter(x=plot_df.index, y=plot_df["signal"], name="信号", mode="lines"),
-            row=3,
-            col=1,
+    try:
+        fig = build_candlestick_chart(
+            price_data=df,
+            trades=trades,
+            symbol=symbol,
+            settings=settings,
+            ui_revision=f"live-candlestick-{symbol}",
         )
+    except ValueError as error:
+        st.error(f"K线图生成失败：{error}")
+        return
 
-    if trades is not None and not trades.empty and "symbol" in trades.columns:
-        symbol_trades = trades[trades["symbol"] == symbol].copy()
-        if not symbol_trades.empty and "date" in symbol_trades.columns:
-            symbol_trades["date"] = pd.to_datetime(symbol_trades["date"])
-            buy_trades = symbol_trades[symbol_trades["action"] == "buy"]
-            sell_trades = symbol_trades[symbol_trades["action"] == "sell"]
-            fig.add_trace(
-                go.Scatter(
-                    x=buy_trades["date"],
-                    y=buy_trades["price"],
-                    mode="markers",
-                    name="买入",
-                    marker=dict(color="red", size=10, symbol="triangle-up"),
-                ),
-                row=1,
-                col=1,
-            )
-            fig.add_trace(
-                go.Scatter(
-                    x=sell_trades["date"],
-                    y=sell_trades["price"],
-                    mode="markers",
-                    name="卖出",
-                    marker=dict(color="green", size=10, symbol="triangle-down"),
-                ),
-                row=1,
-                col=1,
-            )
-
-    fig.update_layout(height=760, hovermode="x unified", xaxis_rangeslider_visible=False)
-    st.plotly_chart(fig, width="stretch")
+    render_candlestick_chart(
+        fig,
+        settings=settings or CandlestickChartSettings(),
+        state_key=f"live_candlestick_chart_{symbol}",
+    )
 
 
 def main() -> None:
@@ -918,7 +879,16 @@ def main() -> None:
         else:
             symbol = st.selectbox("选择标的", sorted(signaled_data.keys()))
             trades = result.trades if result is not None else pd.DataFrame()
-            draw_symbol_chart(symbol, signaled_data[symbol], trades)
+            chart_settings = render_candlestick_chart_controls(
+                key_prefix="live_candlestick",
+                default_panel_indicators=("signal",),
+            )
+            draw_symbol_chart(
+                symbol,
+                signaled_data[symbol],
+                trades,
+                settings=chart_settings,
+            )
             with st.expander("信号数据预览", expanded=False):
                 preview_cols = [
                     col
