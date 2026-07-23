@@ -9,9 +9,11 @@ from pathlib import Path
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from plotly.subplots import make_subplots
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+MODEL_OUTPUT_DIR = PROJECT_ROOT / "output" / "datasets"
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -44,6 +46,115 @@ else:
 @cache_data
 def load_cached_price_history(symbol, adjustment):
     return load_local_price_history(symbol, DEFAULT_PRICE_HISTORY_DIR, adjustment)
+
+
+def normalize_symbol(symbol):
+    value = str(symbol).strip()
+    if value.endswith(".0"):
+        value = value[:-2]
+    return value.zfill(6) if value.isdigit() and len(value) <= 6 else value
+
+
+def list_logistic_prediction_runs():
+    prefix = "trend_logistic_test_predictions_"
+    runs = []
+    for path in MODEL_OUTPUT_DIR.glob("{}*.csv".format(prefix)):
+        run_id = path.stem[len(prefix) :]
+        manifest = MODEL_OUTPUT_DIR / "trend_logistic_manifest_{}.json".format(run_id)
+        if manifest.is_file():
+            runs.append(run_id)
+    return sorted(runs, reverse=True)
+
+
+@cache_data
+def load_logistic_test_predictions(run_id):
+    path = MODEL_OUTPUT_DIR / "trend_logistic_test_predictions_{}.csv".format(run_id)
+    if not path.is_file():
+        return pd.DataFrame()
+    predictions = pd.read_csv(path)
+    required = {"date", "symbol", "p_down", "p_none", "p_up", "predicted_target"}
+    if not required.issubset(predictions.columns):
+        return pd.DataFrame()
+    predictions["date"] = pd.to_datetime(predictions["date"], errors="coerce")
+    predictions["symbol"] = predictions["symbol"].map(normalize_symbol)
+    return predictions.dropna(subset=["date"]).sort_values(["symbol", "date"])
+
+
+def build_logistic_prediction_figure(data, predictions, up_threshold, down_threshold):
+    prediction_index = predictions.set_index("date")
+    aligned = data.loc[:, ["open", "high", "low", "close"]].join(prediction_index, how="inner")
+    figure = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.04,
+        row_heights=[0.7, 0.3],
+    )
+    figure.add_trace(
+        go.Candlestick(
+            x=aligned.index,
+            open=aligned["open"],
+            high=aligned["high"],
+            low=aligned["low"],
+            close=aligned["close"],
+            name="K线",
+        ),
+        row=1,
+        col=1,
+    )
+    up_signals = aligned[aligned["p_up"] >= up_threshold]
+    down_signals = aligned[aligned["p_down"] >= down_threshold]
+    if not up_signals.empty:
+        figure.add_trace(
+            go.Scatter(
+                x=up_signals.index,
+                y=up_signals["low"] * 0.985,
+                mode="markers",
+                name="上涨预警",
+                marker={"color": "#2ca02c", "size": 10, "symbol": "triangle-up"},
+                customdata=up_signals[["p_up", "p_down", "p_none"]],
+                hovertemplate="上涨预警<br>%{x|%Y-%m-%d}<br>p_up=%{customdata[0]:.2%}<br>p_down=%{customdata[1]:.2%}<br>p_none=%{customdata[2]:.2%}<extra></extra>",
+            ),
+            row=1,
+            col=1,
+        )
+    if not down_signals.empty:
+        figure.add_trace(
+            go.Scatter(
+                x=down_signals.index,
+                y=down_signals["high"] * 1.015,
+                mode="markers",
+                name="下跌预警",
+                marker={"color": "#d62728", "size": 10, "symbol": "triangle-down"},
+                customdata=down_signals[["p_up", "p_down", "p_none"]],
+                hovertemplate="下跌预警<br>%{x|%Y-%m-%d}<br>p_down=%{customdata[1]:.2%}<br>p_up=%{customdata[0]:.2%}<br>p_none=%{customdata[2]:.2%}<extra></extra>",
+            ),
+            row=1,
+            col=1,
+        )
+    figure.add_trace(
+        go.Scatter(x=aligned.index, y=aligned["p_up"], mode="lines", name="p_up", line={"color": "#2ca02c"}),
+        row=2,
+        col=1,
+    )
+    figure.add_trace(
+        go.Scatter(x=aligned.index, y=aligned["p_down"], mode="lines", name="p_down", line={"color": "#d62728"}),
+        row=2,
+        col=1,
+    )
+    figure.add_hline(y=up_threshold, line_dash="dot", line_color="#2ca02c", row=2, col=1)
+    figure.add_hline(y=down_threshold, line_dash="dot", line_color="#d62728", row=2, col=1)
+    probability_ceiling = max(0.05, float(aligned[["p_up", "p_down"]].max().max()) * 1.15)
+    figure.update_yaxes(title_text="价格", row=1, col=1)
+    figure.update_yaxes(title_text="趋势概率", range=[0, probability_ceiling], tickformat=".0%", row=2, col=1)
+    figure.update_xaxes(rangeslider_visible=False, row=1, col=1)
+    figure.update_layout(
+        height=760,
+        margin={"l": 20, "r": 20, "t": 45, "b": 20},
+        hovermode="x unified",
+        legend={"orientation": "h", "y": 1.06},
+    )
+    return figure, aligned, up_signals, down_signals
 
 
 def build_regime_figure(data, segments, pivots):
@@ -126,6 +237,16 @@ def main():
     st.sidebar.header("数据与参数")
     symbol = st.sidebar.selectbox("HS300 标的", symbols)
     adjustment = st.sidebar.selectbox("本地价格口径", ["raw_hfq_pct", "qfq", "hfq"], index=0)
+    logistic_runs = list_logistic_prediction_runs()
+    logistic_run = None
+    up_threshold = 0.02
+    down_threshold = 0.02
+    if logistic_runs:
+        st.sidebar.subheader("Logistic 趋势预测")
+        default_run_index = logistic_runs.index("hs300_logistic_v2") if "hs300_logistic_v2" in logistic_runs else 0
+        logistic_run = st.sidebar.selectbox("预测模型版本", logistic_runs, index=default_run_index)
+        up_threshold = st.sidebar.slider("上涨预警阈值 p_up", 0.0, 0.10, 0.02, 0.005)
+        down_threshold = st.sidebar.slider("下跌预警阈值 p_down", 0.0, 0.10, 0.02, 0.005)
     st.sidebar.caption("仅读取 data/raw/tushare/price_history 下的本地 CSV 缓存。")
     st.sidebar.subheader("阶段划分")
     min_segment_length = st.sidebar.slider("最短阶段交易日", 10, 60, 20, 1)
@@ -179,6 +300,12 @@ def main():
         st.stop()
 
     audit = labeler.audit(selected)
+    logistic_predictions = load_logistic_test_predictions(logistic_run) if logistic_run else pd.DataFrame()
+    symbol_predictions = logistic_predictions[
+        (logistic_predictions["symbol"] == normalize_symbol(symbol))
+        & (logistic_predictions["date"] >= selected.index.min())
+        & (logistic_predictions["date"] <= selected.index.max())
+    ].copy() if not logistic_predictions.empty else pd.DataFrame()
     metric_columns = st.columns(4)
     metric_columns[0].metric("交易日", len(selected))
     metric_columns[1].metric("阶段数", len(segments))
@@ -188,8 +315,8 @@ def main():
     st.plotly_chart(build_regime_figure(selected, segments, pivots), width="stretch")
     st.caption("橙色菱形表示最终阶段边界；叉号表示标签发生状态切换的拐点。")
 
-    overview, segment_tab, daily_tab, pivot_tab, audit_tab = st.tabs(
-        ["阶段概览", "阶段表", "逐日状态", "拐点事件", "数据审计"]
+    overview, segment_tab, daily_tab, pivot_tab, prediction_tab, audit_tab = st.tabs(
+        ["阶段概览", "阶段表", "逐日状态", "拐点事件", "模型预测", "数据审计"]
     )
     with overview:
         summary = segments.copy()
@@ -215,6 +342,36 @@ def main():
     with pivot_tab:
         st.dataframe(pivots, width="stretch", hide_index=True)
         st.download_button("下载拐点表 CSV", pivots.to_csv(index=False).encode("utf-8-sig"), "market_regime_pivots_{}.csv".format(symbol), "text/csv")
+    with prediction_tab:
+        if not logistic_runs:
+            st.info("未找到 output/datasets/trend_logistic_test_predictions_*.csv，无法显示模型预测。")
+        elif symbol_predictions.empty:
+            st.info("所选标的或日期区间没有 {} 的测试期预测。模型预测仅覆盖其导出测试集日期。".format(logistic_run))
+        else:
+            figure, aligned_predictions, up_signals, down_signals = build_logistic_prediction_figure(
+                selected, symbol_predictions, up_threshold, down_threshold
+            )
+            prediction_metrics = st.columns(4)
+            prediction_metrics[0].metric("预测交易日", len(aligned_predictions))
+            prediction_metrics[1].metric("上涨预警", len(up_signals))
+            prediction_metrics[2].metric("下跌预警", len(down_signals))
+            prediction_metrics[3].metric("最大趋势概率", "{:.2%}".format(aligned_predictions[["p_up", "p_down"]].max().max()))
+            st.plotly_chart(figure, width="stretch")
+            st.caption(
+                "预测来自 {} 的历史测试集输出；绿色/红色三角分别表示 p_up / p_down 达到当前阈值。"
+                " target 为离线研究标签，仅用于复盘，不可作为当日可得信息。".format(logistic_run)
+            )
+            columns = ["p_up", "p_down", "p_none", "predicted_target"]
+            if "target" in aligned_predictions.columns:
+                columns.append("target")
+            signal_display = aligned_predictions.loc[:, columns].reset_index().rename(columns={"index": "date"})
+            st.dataframe(signal_display.sort_values("date", ascending=False), width="stretch", hide_index=True)
+            st.download_button(
+                "下载模型预测 CSV",
+                signal_display.to_csv(index=False).encode("utf-8-sig"),
+                "logistic_predictions_{}_{}.csv".format(logistic_run, symbol),
+                "text/csv",
+            )
     with audit_tab:
         audit_display = {key: value for key, value in audit.items() if key != "parameters"}
         st.dataframe(pd.DataFrame([audit_display]), width="stretch", hide_index=True)
