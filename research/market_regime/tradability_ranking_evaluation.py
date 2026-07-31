@@ -35,13 +35,15 @@ def load_score_predictions(dataset_dir: Path, model_id: str, split: str) -> pd.D
     return frame.dropna(subset=["date", "symbol", "p_tradable"]).sort_values(["date", "symbol"]).reset_index(drop=True)
 
 
-def select_top_k(scores: pd.DataFrame, top_k: float) -> pd.Series:
-    """Pick the highest ``p_tradable`` observations in each daily universe."""
+def select_top_k(scores: pd.DataFrame, top_k: float, score_column: str = "p_tradable") -> pd.Series:
+    """Pick the highest score observations in each daily universe."""
 
     if not 0 < top_k <= 1:
         raise ValueError("top_k must be in (0, 1]")
-    ranks = scores.groupby("date", sort=False)["p_tradable"].rank(method="first", ascending=False)
-    counts = scores.groupby("date", sort=False)["p_tradable"].transform("size")
+    if score_column not in scores.columns:
+        raise ValueError("Score column is missing: {}".format(score_column))
+    ranks = scores.groupby("date", sort=False)[score_column].rank(method="first", ascending=False)
+    counts = scores.groupby("date", sort=False)[score_column].transform("size")
     return (ranks <= np.ceil(counts * top_k)).astype(bool)
 
 
@@ -64,7 +66,9 @@ def ranking_quality(scores: pd.DataFrame, selected: pd.Series) -> Dict[str, floa
     }
 
 
-def build_rank_market_data(scores: pd.DataFrame, price_history_dir: Optional[str] = None):
+def build_rank_market_data(
+    scores: pd.DataFrame, price_history_dir: Optional[str] = None, score_column: str = "p_tradable"
+):
     """Load test/validation OHLCV once and attach only the causal score."""
 
     market_data = {}
@@ -81,8 +85,8 @@ def build_rank_market_data(scores: pd.DataFrame, price_history_dir: Optional[str
             skipped.append({"symbol": symbol, "reason": "no_prices_in_period"})
             continue
         symbol_scores = scores[scores["symbol"] == symbol].set_index("date")
-        prices = prices.join(symbol_scores[["p_tradable"]], how="left")
-        prices["p_tradable"] = prices["p_tradable"].fillna(0.0)
+        prices = prices.join(symbol_scores[[score_column]].rename(columns={score_column: "rank_score"}), how="left")
+        prices["rank_score"] = prices["rank_score"].fillna(0.0)
         market_data[symbol] = prices
     return market_data, skipped
 
@@ -140,7 +144,7 @@ def make_rank_strategy(max_positions: int, target_notional: float, min_holding_d
         candidates = []
         for symbol, frame in relevant_data.items():
             if symbol not in held and bool(frame.loc[date, "entry_trade"]):
-                candidates.append((symbol, float(frame.loc[date, "p_tradable"]), float(frame.loc[date, "close"])))
+                candidates.append((symbol, float(frame.loc[date, "rank_score"]), float(frame.loc[date, "close"])))
         for symbol, _, price in sorted(candidates, key=lambda item: (-item[1], item[0]))[:slots]:
             shares = int(np.floor(target_notional / price / lot_size) * lot_size) if price > 0 else 0
             if shares > 0:
