@@ -48,7 +48,7 @@ REGIME_DIRECTION = {
 
 def parse_date_text(date_text: str) -> pd.Timestamp:
     parsed = pd.to_datetime(date_text, errors="coerce")
-    if pd.isna(parsed):
+    if parsed != parsed:
         raise ValueError(f"Invalid date: {date_text}")
     return parsed.normalize()
 

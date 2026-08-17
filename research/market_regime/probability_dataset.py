@@ -40,6 +40,7 @@ SAMPLE_METADATA_COLUMNS = (
     "days_to_target",
     "label_available_date",
     "sample_weight",
+    "market_state",
 )
 
 

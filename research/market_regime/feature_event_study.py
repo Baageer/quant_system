@@ -29,6 +29,7 @@ from .data_loader import (
     load_local_price_history,
 )
 from .labeler import MarketRegimeLabeler
+from .market_environment import build_causal_market_features, load_benchmark_history, merge_market_features
 
 
 DEFAULT_FACTOR_NAMES = tuple(AVAILABLE_FACTOR_SPECS)
@@ -107,6 +108,7 @@ def build_causal_feature_panel(
     factor_names: Optional[Iterable[str]] = None,
     feature_limit: Optional[int] = None,
     show_progress: bool = False,
+    benchmark_data: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """Build a ``date, symbol`` panel without future-derived feature fields.
 
@@ -146,7 +148,10 @@ def build_causal_feature_panel(
         frames.append(features.set_index(["date", "symbol"]))
     if not frames:
         return pd.DataFrame(index=pd.MultiIndex.from_arrays([[], []], names=["date", "symbol"]))
-    return pd.concat(frames).sort_index()
+    panel = pd.concat(frames).sort_index()
+    if benchmark_data is not None:
+        panel = merge_market_features(panel, build_causal_market_features(benchmark_data))
+    return panel
 
 
 def audit_feature_causality(
@@ -216,14 +221,16 @@ def build_turning_point_events(
             how="left",
         ).merge(next_status, on="next_segment_id", how="left")
         event_rows = event_rows[
-            event_rows["confirm_date"].notna() & ~event_rows["next_open_segment"].fillna(True)
+            event_rows["confirm_date"].notnull() & ~event_rows["next_open_segment"].fillna(True)
         ].copy()
         event_rows["event_date"] = pd.to_datetime(event_rows["pivot_date"])
         event_rows["transition"] = event_rows["previous_regime"] + "_to_" + event_rows["next_regime"]
         event_rows["event_id"] = event_rows.apply(
             lambda row: "{}:{}:{}".format(row["symbol"], row["event_date"].date().isoformat(), row["transition"]), axis=1
         )
-        event_frames.append(event_rows.drop(columns=["end_date"], errors="ignore"))
+        if "end_date" in event_rows.columns:
+            event_rows = event_rows.drop(["end_date"], axis=1)
+        event_frames.append(event_rows)
     events = pd.concat(event_frames, ignore_index=True) if event_frames else pd.DataFrame()
     return events, pd.DataFrame(skipped, columns=["symbol", "reason"])
 
@@ -317,10 +324,10 @@ def match_non_event_controls(
             candidates = candidates[np.abs((candidates.index - pd.Timestamp(pivot_date)).days) > exclusion_days]
         target = symbol_panel.loc[event_date, available]
         candidates = candidates.dropna(subset=available)
-        if candidates.empty or target.isna().any():
+        if candidates.empty or target.isnull().any():
             continue
         scale = symbol_panel.loc[:event_date, available].std().replace(0, np.nan)
-        distances = ((candidates[available] - target) / scale).pow(2).sum(axis=1, min_count=1)
+        distances = ((candidates[available] - target) / scale).pow(2).sum(axis=1)
         distances = distances.replace([np.inf, -np.inf], np.nan).dropna()
         if distances.empty:
             continue
@@ -470,12 +477,15 @@ def build_turning_point_feature_study(
     candidate_selection_end: Optional[str] = "2018-12-31",
     export_observations: bool = False,
     show_progress: bool = False,
+    benchmark_data: Optional[pd.DataFrame] = None,
 ) -> Dict[str, pd.DataFrame]:
     """Build the causal panel, offline events, matched controls and summaries."""
 
-    panel = build_causal_feature_panel(stock_data, factor_names, feature_limit, show_progress)
+    panel = build_causal_feature_panel(
+        stock_data, factor_names, feature_limit, show_progress, benchmark_data=benchmark_data
+    )
     events, skipped = build_turning_point_events(stock_data, labeler, show_progress)
-    feature_columns = list(panel.columns)
+    feature_columns = panel.select_dtypes(include=[np.number]).columns.tolist()
     controls = match_non_event_controls(panel, events, show_progress=show_progress)
     control_events = events.merge(controls.loc[:, ["event_id", "control_date", "match_distance"]], on="event_id", how="inner") if not controls.empty else events.iloc[0:0].copy()
     summary, effects = summarize_event_windows_compact(
@@ -571,6 +581,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--adjustment", default="raw_hfq_pct")
     parser.add_argument("--output-dir", default="output")
     parser.add_argument("--run-id", default=None)
+    parser.add_argument("--benchmark-file", default=None, help="Optional benchmark CSV with date, close and optional high/low.")
     parser.add_argument("--pre-window", type=int, default=60)
     parser.add_argument("--post-window", type=int, default=20)
     parser.add_argument("--candidate-selection-end", default="2018-12-31")
@@ -588,6 +599,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         symbols = symbols[: args.limit]
     show_progress = not args.no_progress
     stock_data, loading_skips = _load_stock_data(symbols, args.price_history_dir, args.adjustment, show_progress)
+    benchmark_data = load_benchmark_history(args.benchmark_file) if args.benchmark_file else None
     report = build_turning_point_feature_study(
         stock_data,
         feature_limit=args.feature_limit,
@@ -596,6 +608,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         candidate_selection_end=args.candidate_selection_end,
         export_observations=args.export_observations,
         show_progress=show_progress,
+        benchmark_data=benchmark_data,
     )
     report["skipped_symbols"] = pd.concat([loading_skips, report["skipped_symbols"]], ignore_index=True)
     paths = export_turning_point_feature_study(report, args.output_dir, args.run_id)

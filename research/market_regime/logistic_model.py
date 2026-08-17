@@ -43,6 +43,7 @@ MODEL_METADATA_COLUMNS = {
     "sample_weight",
     "split",
     "split_reason",
+    "market_state",
 }
 
 
@@ -128,7 +129,6 @@ def _fit_classifier(features: np.ndarray, targets: np.ndarray, sample_weight: np
         C=float(c_value),
         penalty="l2",
         solver="lbfgs",
-        multi_class="multinomial",
         max_iter=1000,
         random_state=42,
     )
@@ -396,6 +396,15 @@ def train_logistic_experiment(
                 build_calibration_table(test_targets, test_probabilities, test_event_weights, "test", final_model_name),
             ]
         )
+    test_predictions = prediction_table(test_samples, test_probabilities, final_model_name)
+    validation_predictions = prediction_table(validation_samples, validation_probabilities, final_model_name)
+    market_state_metrics = pd.DataFrame()
+    if "market_state" in test_samples.columns:
+        from research.market_regime.market_environment import stratify_probability_predictions
+
+        market_state_metrics = stratify_probability_predictions(
+            test_predictions, test_samples, evaluate_probabilities, split="test"
+        )
     return {
         "selected_c": selected_c,
         "feature_columns": feature_columns,
@@ -406,8 +415,9 @@ def train_logistic_experiment(
         "metrics": pd.DataFrame(metrics_rows),
         "calibration": pd.concat(calibration_tables, ignore_index=True),
         "coefficients": coefficient_table(selected_model, preprocessor),
-        "test_predictions": prediction_table(test_samples, test_probabilities, final_model_name),
-        "validation_predictions": prediction_table(validation_samples, validation_probabilities, final_model_name),
+        "test_predictions": test_predictions,
+        "validation_predictions": validation_predictions,
+        "market_state_metrics": market_state_metrics,
         "test_model_name": final_model_name,
         "train_prevalence": train_prevalence,
     }
@@ -422,7 +432,7 @@ def load_dataset_splits(dataset_dir: Union[str, Path], dataset_id: str) -> Tuple
     missing = [str(path) for path in paths.values() if not path.is_file()]
     if missing:
         raise FileNotFoundError("Missing Logistic model samples: {}".format(missing))
-    return tuple(pd.read_csv(paths[split]) for split in ("train", "validation", "test"))
+    return tuple(pd.read_csv(paths[split], low_memory=False) for split in ("train", "validation", "test"))
 
 
 def export_logistic_experiment(
@@ -443,6 +453,7 @@ def export_logistic_experiment(
         "coefficients": "trend_logistic_coefficients",
         "validation_predictions": "trend_logistic_validation_predictions",
         "test_predictions": "trend_logistic_test_predictions",
+        "market_state_metrics": "trend_logistic_market_state_metrics",
     }
     paths = {}
     for key, prefix in tables.items():
