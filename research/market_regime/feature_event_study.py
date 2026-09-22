@@ -30,6 +30,7 @@ from .data_loader import (
 )
 from .labeler import MarketRegimeLabeler
 from .market_environment import build_causal_market_features, load_benchmark_history, merge_market_features
+from .output_paths import DATASET_DIR
 
 
 DEFAULT_FACTOR_NAMES = tuple(AVAILABLE_FACTOR_SPECS)
@@ -579,7 +580,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--limit", type=int, default=None, help="Limit symbols for a quick research run")
     parser.add_argument("--price-history-dir", default=str(DEFAULT_PRICE_HISTORY_DIR))
     parser.add_argument("--adjustment", default="raw_hfq_pct")
-    parser.add_argument("--output-dir", default="output")
+    parser.add_argument("--output-dir", default=DATASET_DIR)
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--benchmark-file", default=None, help="Optional benchmark CSV with date, close and optional high/low.")
     parser.add_argument("--pre-window", type=int, default=60)

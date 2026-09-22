@@ -90,12 +90,18 @@ def add_auxiliary_labels(
     price_histories: Mapping[str, pd.DataFrame],
     horizons: Sequence[int] = DEFAULT_HORIZONS,
     volatility_window: int = DEFAULT_VOLATILITY_WINDOW,
+    benchmark_returns: Optional[pd.Series] = None,
 ) -> pd.DataFrame:
     """Append future return, excess return, volatility and MAE labels.
 
     Entry is the next trading session after the sample's EOD feature date.
     A horizon of ``h`` exits after ``h`` additional sessions.  The resulting
     label availability date is therefore the exit session, not the signal day.
+
+    ``benchmark_returns`` optionally supplies an injected benchmark level
+    series (date-indexed, cumulative-product level) against which excess
+    returns are measured, e.g. a market index.  When omitted the label-only
+    equal-weight cross-section benchmark is used and behaviour is unchanged.
     """
 
     horizons = tuple(sorted({int(value) for value in horizons}))
@@ -112,7 +118,16 @@ def add_auxiliary_labels(
             "future_mae_{}d".format(horizon),
         ):
             result[column] = np.nan
-    benchmark = build_cross_section_benchmark(price_histories)
+    if benchmark_returns is not None:
+        benchmark = pd.Series(pd.to_numeric(benchmark_returns, errors="coerce"))
+        benchmark = benchmark.loc[benchmark.index.notnull()].sort_index()
+        benchmark = benchmark.loc[~benchmark.index.duplicated(keep="last")]
+        if benchmark.index.name != "date":
+            benchmark.index.name = "date"
+        if len(benchmark) < 2 or not benchmark.index.is_monotonic_increasing:
+            raise ValueError("benchmark_returns must be a non-empty date-indexed level series")
+    else:
+        benchmark = build_cross_section_benchmark(price_histories)
     for symbol, index in tqdm(
         result.groupby("symbol", sort=False).groups.items(),
         total=result["symbol"].nunique(),

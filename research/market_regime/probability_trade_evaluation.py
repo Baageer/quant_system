@@ -23,6 +23,7 @@ from tqdm import tqdm
 
 from backtest.engine import BacktestEngine
 from research.market_regime.data_loader import load_local_price_history
+from research.market_regime.selection_rule import select_configuration
 
 
 TOP_K_GRID = (0.005, 0.01, 0.02, 0.03, 0.05, 0.10)
@@ -36,6 +37,8 @@ TRADING_POLICY_GRID = (
     {"policy_id": "biweekly_confirm_2_hold_10", "entry_confirm_days": 2, "exit_threshold_multiplier": 0.85, "min_holding_days": 10, "rebalance_weeks": 2},
     {"policy_id": "weekly_confirm_2_wide_exit", "entry_confirm_days": 2, "exit_threshold_multiplier": 0.75, "min_holding_days": 10, "rebalance_weeks": 1},
 )
+# The unslowed policy everything else has to beat; see choose_validation_policy.
+BASELINE_POLICY_ID = "daily_alert_baseline"
 REQUIRED_PREDICTION_COLUMNS = {
     "date",
     "symbol",
@@ -582,22 +585,48 @@ def build_validation_policy_grid(
 
 
 def choose_validation_policy(grid: pd.DataFrame) -> Dict[str, object]:
-    """Freeze the best eligible validation policy before touching test data."""
+    """Freeze the selected validation policy before touching test data.
+
+    A non-baseline policy is adopted only if it **beats the daily baseline**;
+    otherwise the baseline is frozen.  Ranking the grid alone cannot express
+    "keep the baseline", so it would always adopt some slower policy even when
+    none of them improves on it.
+    """
 
     if grid.empty:
         raise ValueError("Validation policy grid is empty")
-    candidates = grid[grid["eligible"]]
-    selected = (candidates if not candidates.empty else grid).sort_values(
-        ["validation_total_return", "validation_turnover_multiple"],
-        ascending=[False, True],
-    ).iloc[0]
+    # The eligibility pre-screen drops policies that barely traded.  The baseline
+    # is exempt: it is the reference the others must beat, not a candidate, and
+    # dropping it would leave the rule with nothing to compare against.
+    candidates = grid[grid["eligible"] | grid["policy_id"].eq(BASELINE_POLICY_ID)]
+    # ``turnover_floor_frac=0.05``: the floor exists to stop the grid adopting
+    # something that barely trades, but it is calibrated against the baseline's
+    # turnover -- and here the baseline is the *fastest* arm in the grid (daily
+    # alerts), so the default 0.5x would mean "do not slow down by more than 2x",
+    # i.e. it would fight this module's entire purpose.  0.05 is the threshold
+    # ``rolling_band_selection`` measured as equivalent to 0.25x (both exclude
+    # only the truly degenerate arm), so it is a measured degeneracy cut, not a
+    # tuned one.
+    outcome = select_configuration(
+        candidates,
+        baseline_key={"policy_id": BASELINE_POLICY_ID},
+        key_columns=("policy_id",),
+        return_column="validation_total_return",
+        turnover_column="validation_turnover_multiple",
+        turnover_floor_frac=0.05,
+    )
+    if outcome.row is None:
+        print("\npolicy selection: NO CHANGE -- {}".format(outcome.reason))
+    selected = (outcome.row if outcome.row is not None
+                else candidates[candidates["policy_id"] == BASELINE_POLICY_ID].iloc[0])
     return {
         "policy_id": str(selected["policy_id"]),
         "entry_confirm_days": int(selected["entry_confirm_days"]),
         "exit_threshold_multiplier": float(selected["exit_threshold_multiplier"]),
         "min_holding_days": int(selected["min_holding_days"]),
         "rebalance_weeks": int(selected["rebalance_weeks"]),
-        "selection_objective": "validation_net_total_return_then_lower_turnover",
+        "selection_objective": "selection_rule.select_configuration vs {!r}".format(BASELINE_POLICY_ID),
+        "selection_reason": outcome.reason,
         "validation_total_return": float(selected["validation_total_return"]),
         "validation_turnover_multiple": float(selected["validation_turnover_multiple"]),
         "validation_filled_buy_count": int(selected["validation_filled_buy_count"]),
@@ -680,6 +709,10 @@ def run_evaluation(
         summarize_backtest("probability_frictionless", frictionless_results, frictionless_trades, initial_capital),
         summarize_backtest("passive_equal_weight_sample_net", passive_results, passive_trades, initial_capital),
     ])
+    # Imported here rather than at module scope: passive_benchmark imports
+    # summarize_backtest from this module, so a top-level import would cycle.
+    from research.market_regime.passive_benchmark import append_index_arm
+    backtest_metrics = append_index_arm(backtest_metrics, probability_results, initial_capital)
     net = backtest_metrics.set_index("strategy").loc["probability_net"]
     passive = backtest_metrics.set_index("strategy").loc["passive_equal_weight_sample_net"]
     frictionless = backtest_metrics.set_index("strategy").loc["probability_frictionless"]

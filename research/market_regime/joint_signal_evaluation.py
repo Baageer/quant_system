@@ -8,6 +8,7 @@ from typing import Mapping, Optional, Sequence
 import numpy as np
 import pandas as pd
 
+from research.market_regime.passive_benchmark import append_index_arm
 from research.market_regime.probability_trade_evaluation import _run_engine, make_passive_strategy, select_passive_symbols, summarize_backtest
 from research.market_regime.tradability_ranking_evaluation import (
     apply_rank_selection,
@@ -102,6 +103,7 @@ def run_joint_evaluation(
         summarize_backtest("p_up_and_p_tradable_frictionless", free_results, free_trades, initial_capital),
         summarize_backtest("passive_equal_weight_sample_net", passive_results, passive_trades, initial_capital),
     ])
+    metrics = append_index_arm(metrics, net_results, initial_capital)
     output_dir.mkdir(parents=True, exist_ok=True)
     prefix = "trend_joint_signal_{}".format(model_id)
     grid.to_csv(output_dir / (prefix + "_validation_grid.csv"), index=False)

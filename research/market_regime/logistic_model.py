@@ -17,6 +17,7 @@ import pickle
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Sequence, Tuple, Union
+from .output_paths import DATASET_DIR
 
 import numpy as np
 import pandas as pd
@@ -435,6 +436,38 @@ def load_dataset_splits(dataset_dir: Union[str, Path], dataset_id: str) -> Tuple
     return tuple(pd.read_csv(paths[split], low_memory=False) for split in ("train", "validation", "test"))
 
 
+def truncate_train_start(train_samples: pd.DataFrame, train_start: Optional[str]) -> pd.DataFrame:
+    """Drop training rows dated before ``train_start`` (inclusive boundary).
+
+    Only the *training* split is truncated.  Validation and test define what the
+    model is measured on, so an arm trained on a shorter history is still scored
+    over the same period as a full-history arm and the two stay comparable.
+
+    Why this exists: the excess label is measured against an index, and rows
+    whose *benchmark* level is missing get a NaN label and drop out.  The
+    benchmark's start date therefore silently becomes the training set's start
+    date.  中证1000's 000852 history begins in 2014 while HS300's 000300 begins in
+    2005, so a 中证1000 run cannot train on the same history as v1.  Rather than
+    confound "different universe" with "shorter history", the HS300 arm can be
+    re-trained from the same start date and the two compared directly.
+    """
+
+    if train_start is None or str(train_start).strip() == "":
+        return train_samples
+    if "date" not in train_samples.columns:
+        raise ValueError("training samples have no date column to truncate on")
+    boundary = pd.Timestamp(train_start)
+    dates = pd.to_datetime(train_samples["date"], errors="coerce")
+    kept = train_samples.loc[dates >= boundary].reset_index(drop=True)
+    if kept.empty:
+        earliest = dates.min()
+        raise ValueError(
+            "--train-start {} leaves no training rows (earliest row is {})".format(
+                boundary.date(), "none" if pd.isna(earliest) else earliest.date())
+        )
+    return kept
+
+
 def export_logistic_experiment(
     report: Mapping[str, object],
     output_dir: Union[str, Path],
@@ -502,14 +535,22 @@ def _parse_c_values(text: str) -> List[float]:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Train and evaluate the multinomial trend Logistic baseline.")
-    parser.add_argument("--dataset-dir", default="output/batchs")
+    parser.add_argument("--dataset-dir", default=DATASET_DIR)
     parser.add_argument("--dataset-id", required=True)
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--c-values", default="0.03,0.1,0.3,1,3,10")
     parser.add_argument("--calibration", choices=("none", "multinomial"), default="multinomial")
+    parser.add_argument("--train-start", default=None,
+                        help="drop training rows before this date (YYYY-MM-DD); "
+                             "validation and test are untouched")
     args = parser.parse_args(argv)
     train_samples, validation_samples, test_samples = load_dataset_splits(args.dataset_dir, args.dataset_id)
+    full_train_rows = int(len(train_samples))
+    train_samples = truncate_train_start(train_samples, args.train_start)
+    if args.train_start:
+        print("[train-start] {} kept {} of {} training rows (first date {})".format(
+            args.train_start, len(train_samples), full_train_rows, train_samples["date"].min()), flush=True)
     report = train_logistic_experiment(
         train_samples,
         validation_samples,
@@ -527,6 +568,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "dataset_dir": str(args.dataset_dir),
             "c_values": _parse_c_values(args.c_values),
             "validation_selection_metric": "trend_macro_pr_auc, then log_loss",
+            "train_start": args.train_start,
+            "train_rows_full": full_train_rows,
+            "train_rows_used": int(len(train_samples)),
         },
     )
     selected_metrics = report["metrics"]

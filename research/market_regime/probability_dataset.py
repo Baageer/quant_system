@@ -22,6 +22,7 @@ import pandas as pd
 from tqdm.auto import tqdm
 
 from .feature_event_study import _effects_from_summary, summarize_turning_point_features
+from .output_paths import DATASET_DIR
 
 
 DEFAULT_TRAIN_END = "2018-12-31"
@@ -659,7 +660,7 @@ def _load_study_tables(
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Prepare time-split samples for the trend probability model.")
     parser.add_argument("--study-run-id", required=True, nargs="+", help="One or more prior feature_event_study export IDs")
-    parser.add_argument("--output-dir", default="output")
+    parser.add_argument("--output-dir", default=DATASET_DIR)
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--horizon", type=int, default=DEFAULT_HORIZON)
     parser.add_argument("--min-event-confidence", type=float, default=0.0)

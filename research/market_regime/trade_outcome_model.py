@@ -26,9 +26,10 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import Ridge
 
-from research.market_regime.logistic_model import fit_preprocessor, transform_features
+from research.market_regime.logistic_model import fit_preprocessor, transform_features, truncate_train_start
 from research.market_regime.tradability_labels import normalize_a_share_symbols
 from research.market_regime.tradability_model import load_trend_feature_columns
+from research.market_regime.output_paths import DATASET_DIR
 
 
 def target_columns(horizon: int) -> Tuple[str, str]:
@@ -307,15 +308,18 @@ def _parse_float_values(value: str, argument: str, minimum: float = 0.0) -> List
 
 def main(argv: Optional[Sequence[str]] = None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dataset-dir", default="output/datasets")
+    parser.add_argument("--dataset-dir", default=DATASET_DIR)
     parser.add_argument("--dataset-id", default="hs300_probability_dataset")
     parser.add_argument("--trend-model-id", default="hs300_logistic_v2")
     parser.add_argument("--run-id", default="hs300_trade_outcome_v1")
-    parser.add_argument("--output-dir", default="output/datasets")
+    parser.add_argument("--output-dir", default=DATASET_DIR)
     parser.add_argument("--horizon", type=int, default=10)
     parser.add_argument("--alphas", default="0.1,1,10,100")
     parser.add_argument("--risk-penalties", default="0,0.25,0.5,1")
     parser.add_argument("--top-k", type=float, default=0.05)
+    parser.add_argument("--train-start", default=None,
+                        help="drop training rows before this date (YYYY-MM-DD); "
+                             "validation and test are untouched")
     args = parser.parse_args(argv)
     dataset_dir = Path(args.dataset_dir)
     features = load_trend_feature_columns(dataset_dir, args.trend_model_id)
@@ -323,6 +327,11 @@ def main(argv: Optional[Sequence[str]] = None):
         load_outcome_split(dataset_dir, args.dataset_id, split, features, args.horizon)
         for split in ("train", "validation", "test")
     ]
+    full_train_rows = int(len(splits[0]))
+    splits[0] = truncate_train_start(splits[0], args.train_start)
+    if args.train_start:
+        print("[train-start] {} kept {} of {} training rows (first date {})".format(
+            args.train_start, len(splits[0]), full_train_rows, splits[0]["date"].min()), flush=True)
     report = train_trade_outcome_experiment(
         *splits,
         feature_columns=features,
@@ -341,6 +350,9 @@ def main(argv: Optional[Sequence[str]] = None):
             "alpha_values": _parse_float_values(args.alphas, "alphas"),
             "risk_penalties": _parse_float_values(args.risk_penalties, "risk-penalties"),
             "selection_objective": "validation_top_k_excess_over_universe_then_lower_downside",
+            "train_start": args.train_start,
+            "train_rows_full": full_train_rows,
+            "train_rows_used": int(len(splits[0])),
         },
     )
     test_metrics = report["metrics"].query("split == 'test'").iloc[0]

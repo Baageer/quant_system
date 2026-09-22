@@ -5,6 +5,24 @@ from signals.strategy_loader import StrategyLoader
 from signals.timing.common_filters import FilteredTimingStrategy
 
 
+def _loaded_class_name(strategy):
+    """The strategy class the loader built, unwrapped from any common filter.
+
+    ``ma_cross`` carries ``use_volume_filter: true`` in the repo's
+    ``config/strategies.yaml``, so the loader wraps it in a
+    ``FilteredTimingStrategy`` -- behaviour added by the common-filters commit,
+    which also left this file's older assertion on the bare class name behind.
+    The wrapping is a *config* choice that may be switched off again, so the
+    stable contract to assert is which class got loaded; whether it is wrapped
+    is asserted by ``test_common_filters_wrap_strategy_when_enabled``, which
+    sets the config itself instead of depending on it.
+    """
+
+    while isinstance(strategy, FilteredTimingStrategy):
+        strategy = strategy._strategy
+    return strategy.__class__.__name__
+
+
 class TestStrategyLoader:
     def test_build_timing_strategies(self):
         loader = StrategyLoader("./config/strategies.yaml")
@@ -13,7 +31,7 @@ class TestStrategyLoader:
 
         assert len(strategies) == 1
         assert len(strategy_infos) == 1
-        assert strategies[0].__class__.__name__ == "MACrossStrategy"
+        assert _loaded_class_name(strategies[0]) == "MACrossStrategy"
         assert strategy_infos[0]["module"] == "signals.timing.ma_cross"
 
     def test_build_volume_timing_strategies(self):

@@ -63,18 +63,49 @@
 - `logs/`
   - 运行日志
 
-## 运行命令
+## Python 解释器（固定）
 
-在仓库根目录执行。
+本仓库统一使用下面这个解释器，不要用裸 `python`：
 
 ```powershell
-pip install -r requirements.txt
+D:\ProgramData\miniconda3\envs\llm\python.exe        # PowerShell / cmd
+```
+
+```bash
+/d/ProgramData/miniconda3/envs/llm/python.exe        # Git Bash
+```
+
+裸 `python` 在 Git Bash 下会解析到 `C:\Users\<用户>\AppData\Local\Microsoft\WindowsApps\python`（WindowsApps 存根，静默失败或返回退出码 49），base 环境也没有 pandas。
+
+`.vscode/settings.json` 已与上面对齐（`python.defaultInterpreterPath` = `D:\ProgramData\miniconda3\envs\llm\python.exe`，2026-09-15 修正；此前指向不存在的 `D:\Anaconda3\envs\llm\python.exe`）。同时开启了 `python.testing.pytestEnabled`，因此仓库根的 `pytest.ini` 决定 VS Code 测试面板的发现范围——它把范围限定在 `tests/`，原因见「测试现状」。
+
+该环境的依赖现状（2026-09-15 实测）：
+
+- **`pytest` 9.1.1 已装**，`python -m pytest tests -q` 可跑（注意必须限定 `tests/`，原因见「测试现状」）。
+- **已安装 `streamlit` 1.63.0**，`streamlit run` 可以启动；`plotly` 原本缺失，已补装 7.0.0（`requirements.txt:19` 声明的是 `plotly>=5.0.0`，应用在顶层 import 它）。
+- 仓库根目录另有一个名为 `streamlit/` 的目录（内含 `industry_index_daily_monitor_app.py`）。**它不会遮蔽真包**：`site-packages/streamlit/` 是常规包（有 `__init__.py`），常规包优先于路径上更靠前的命名空间包片段，所以在仓库根 `import streamlit` 拿到的是真库，`streamlit.testing.v1.AppTest` 可用。只有在 streamlit 未安装时，`import streamlit` 才会解析到这个目录——看到 `streamlit.__file__ is None` 是「没装」的信号，不是「装坏了」的信号。
+
+从仓库根调用模块（`-m` 形式依赖仓库根在 `sys.path` 上）：
+
+```bash
+/d/ProgramData/miniconda3/envs/llm/python.exe -m research.market_regime.index_valuation_diagnostic --run-id index_valuation_v1
+```
+
+## 运行命令
+
+在仓库根目录执行。下面的 `python` 均指上一节固定的解释器。
+
+```powershell
+D:\ProgramData\miniconda3\envs\llm\python.exe -m pip install -r requirements.txt
 python run_backtest.py --list
 python run_backtest.py --strategy ma_cross --start 2023-01-01 --end 2023-12-31
 python run_backtest.py --strategy ma_cross,rsi --signal-combination weighted --signal-weights 0.6,0.4
 streamlit run app_streamlit.py
 streamlit run app_backtest.py
-pytest -q
+```
+
+```bash
+/d/ProgramData/miniconda3/envs/llm/python.exe -m pytest tests -q     # 测试（必须限定 tests/）
 ```
 
 ## 策略扩展约定
@@ -126,26 +157,33 @@ pytest -q
 
 ## 测试现状
 
-截至 2026-04-13，在当前环境直接执行：
+**`pytest` 已装（9.1.1），用它。** 仓库自带的 `tests/run_tests.py` 请不要再当作全量测试用——它只覆盖 402 个里的 165 个（见下）。
 
-```powershell
-pytest -q
+```bash
+<python.exe> -m pytest -q                                        # 全量：402 passed（2026-09-15）
+<python.exe> -m pytest tests/test_strategy_loader.py -q          # 定向
+<python.exe> -m pytest -q -p no:warnings                         # 关掉 pandas FutureWarning 噪声
 ```
 
-结果不是全绿，现状为：
+**必须在仓库根目录执行。** 测试里有 `./config/settings.yaml` 这类相对 cwd 的路径，在 `tests/` 里跑会得到 17 个 `FileNotFoundError`（既有约定，不是坏测试）。
 
-- `64 passed`
-- `59 failed`
+发现范围由仓库根的 `pytest.ini` 限定为 `testpaths = tests`。没有它的话，裸 `pytest` 会收进 `research/experiments/bollinger/test_bollinger.py`，而那个文件在**导入期**就 `os.listdir` 一个硬编码的 `J:\workspace\2_quant\quant_system\data\raw\akshare\price_history`，整轮收集中断、一个测试都跑不了。VS Code 测试面板受同一个设置约束。
 
-失败主要集中在两类问题：
+### 为什么废弃 `tests/run_tests.py` 作全量入口
 
-- 多处代码和测试使用 `pd.isna`，当前环境下会抛出 `AttributeError: module 'pandas' has no attribute 'isna'`
-- `rolling(...).apply(..., raw=True)` 在当前环境中触发 `TypeError`
+它是个零参数调用器，**只会调用模块级函数**，类内测试（`TestXxx`）一个都不跑。实测差距：
 
-这意味着：
+| 运行器 | 收集 | 结果 |
+|---|---|---|
+| `python -m pytest tests -q` | 402 | 402 passed |
+| `python tests/run_tests.py` | 165 | `total 165 fails 6` |
 
-- 当前仓库不能把“测试已通过”视作默认前提
-- 修改指标与信号逻辑后，建议优先跑定向测试，而不是默认依赖全量测试通过
+192 个类内测试方法从未被它执行；并且它**掩盖过一个真实失败**——`test_build_timing_strategies` 断言 `ma_cross` 加载后是裸 `MACrossStrategy`，但 `config/strategies.yaml` 给 `ma_cross` 配了 `use_volume_filter: true`，加载器会把它包进 `FilteredTimingStrategy`。该断言是 common-filters 那次提交留下的陈述，已于 2026-09-15 修正。
+
+它剩下的 6 个失败全是 `TypeError: ... missing 1 required positional argument: 'tmpdir'`（fixture 参数被零参调用），在 pytest 下全部通过。**这些失败不代表仓库有 6 个坏测试，只代表那个运行器不注入 fixture。**
+
+- 新增测试请按 pytest 写，可以正常使用 `tmpdir` 等内置 fixture
+- 如果仍要用 `tests/run_tests.py` 跑单个模块，则该模块的函数不能带 fixture 参数
 
 ## 建议的工作方式
 
@@ -154,6 +192,7 @@ pytest -q
 - 修改指标时，同步检查 `tests/test_indicators.py`
 - 修改回测导出逻辑时，同步检查 `app_backtest.py` 对文件名模式的假设
 - 新增或修改 Streamlit 页面时，使用 `width="stretch"` 或 `width="content"`，不要使用将被移除的 `use_container_width` 参数
+- 改完 Streamlit 页面要冒烟时，不必开浏览器：`from streamlit.testing.v1 import AppTest` 可以无头跑整个脚本并遍历控件（`at.selectbox[i].set_value(...).run()`），异常、报错和渲染出的 `dataframe` / `plotly_chart` 都能读到。这是本项目发现「图表构造函数读了不存在的列」这类渲染期缺陷的唯一有效手段——语法检查和单测都盖不到
 - 默认从仓库根目录运行脚本，很多相对路径都是按根目录写的
 
 ## 非源码目录说明

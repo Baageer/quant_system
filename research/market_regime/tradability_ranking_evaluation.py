@@ -9,18 +9,23 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from research.market_regime.data_loader import load_local_price_history
+from research.market_regime.data_loader import load_local_price_history, load_local_price_history_multi
+from research.market_regime.passive_benchmark import append_index_arm
 from research.market_regime.probability_trade_evaluation import (
     _run_engine,
     make_passive_strategy,
     select_passive_symbols,
     summarize_backtest,
 )
+from research.market_regime.selection_rule import select_configuration
 from research.market_regime.tradability_labels import normalize_a_share_symbols
 from research.market_regime.tradability_model import POSITIVE_CLASS, TARGET_COLUMN, _weights
 
 
 TOP_K_GRID = (0.005, 0.01, 0.02, 0.03, 0.05, 0.10)
+# The production/v1 default basket width.  The grid may only move off it if a
+# narrower or wider basket is shown to beat it -- see evaluate_validation_grid.
+BASELINE_TOP_K = 0.10
 
 
 def load_score_predictions(dataset_dir: Path, model_id: str, split: str) -> pd.DataFrame:
@@ -67,16 +72,32 @@ def ranking_quality(scores: pd.DataFrame, selected: pd.Series) -> Dict[str, floa
 
 
 def build_rank_market_data(
-    scores: pd.DataFrame, price_history_dir: Optional[str] = None, score_column: str = "p_tradable"
+    scores: pd.DataFrame,
+    price_history_dir: Optional[str] = None,
+    score_column: str = "p_tradable",
+    price_history_dirs: Optional[Sequence[str]] = None,
 ):
-    """Load test/validation OHLCV once and attach only the causal score."""
+    """Load test/validation OHLCV once and attach only the causal score.
+
+    ``price_history_dirs`` reads the same frames from several roots concatenated
+    (historical cache first, forward window second) without writing to either.
+    The published runs pass a single directory via ``price_history_dir``; the two
+    are mutually exclusive so a caller can never be unsure which was used.
+    """
+
+    if price_history_dirs and price_history_dir:
+        raise ValueError("pass either price_history_dir or price_history_dirs, not both")
+    roots = [Path(root) for root in price_history_dirs] if price_history_dirs else None
 
     market_data = {}
     skipped = []
     start_date, end_date = scores["date"].min(), scores["date"].max()
     for symbol in tqdm(sorted(scores["symbol"].unique()), desc="Loading ranking prices", unit="symbol"):
         try:
-            prices = load_local_price_history(symbol, price_history_dir=price_history_dir)
+            if roots:
+                prices = load_local_price_history_multi(symbol, roots)
+            else:
+                prices = load_local_price_history(symbol, price_history_dir=price_history_dir)
         except (FileNotFoundError, ValueError) as exc:
             skipped.append({"symbol": symbol, "reason": str(exc)})
             continue
@@ -161,7 +182,12 @@ def evaluate_validation_grid(
     max_positions: int,
     config_path: str,
 ) -> pd.DataFrame:
-    """Select Top-K by validation net return; quality metrics remain visible."""
+    """Score every Top-K on validation; quality metrics remain visible.
+
+    The returned frame is the *inspection view*, ranked by validation net return
+    -- it is no longer the decision.  ``select_top_k_on_validation`` applies the
+    shared rule on top of it.
+    """
 
     start_date, end_date = validation_scores["date"].min(), validation_scores["date"].max()
     target_notional = initial_capital / max_positions
@@ -179,6 +205,40 @@ def evaluate_validation_grid(
     ).reset_index(drop=True)
 
 
+def select_top_k_on_validation(
+    validation_grid: pd.DataFrame, baseline_top_k: float = BASELINE_TOP_K
+) -> float:
+    """Pick the basket width, where ``baseline_top_k`` is the baseline.
+
+    Ranking the grid would always move off the baseline, because *some* width
+    always wins on validation -- and width is a construction parameter, so a
+    grid argmax is reading a point off a mechanical trade-off (basket breadth
+    against per-name edge and turnover), not producing evidence that the
+    baseline is wrong.  Under the rule the baseline has to be beaten outright,
+    and "stay where we are" is a reachable outcome.
+
+    ``baseline_top_k`` defaults to the trading-v1 default (``BASELINE_TOP_K``)
+    so this module's behaviour is unchanged.  Callers whose incumbent width is
+    something else -- the direct outcome model publishes 0.05/0.10 per pool --
+    must pass it in; there is deliberately no way to leave it implicit, because
+    a baseline that is quietly wrong makes every candidate compare against the
+    wrong bar and the rule then reports "no change" as if that were evidence.
+    """
+
+    outcome = select_configuration(
+        validation_grid,
+        baseline_key={"top_k": baseline_top_k},
+        key_columns=("top_k",),
+        return_column="validation_total_return",
+        turnover_column="validation_turnover_multiple",
+    )
+    if outcome.row is None:
+        print("\ntop_k selection: NO CHANGE -- {}".format(outcome.reason))
+        return baseline_top_k
+    print("\ntop_k selection: {}".format(outcome.reason))
+    return float(outcome.row["top_k"])
+
+
 def run_ranking_evaluation(
     dataset_dir: Path,
     model_id: str,
@@ -194,7 +254,7 @@ def run_ranking_evaluation(
     if not validation_raw:
         raise ValueError("No validation price data")
     validation_grid = evaluate_validation_grid(validation, validation_raw, initial_capital, max_positions, config_path)
-    selected_top_k = float(validation_grid.iloc[0]["top_k"])
+    selected_top_k = select_top_k_on_validation(validation_grid)
     test_selected = select_top_k(test, selected_top_k)
     test_raw, test_skipped = build_rank_market_data(test, price_history_dir)
     prepared_test = apply_rank_selection(test_raw, test, test_selected)
@@ -209,6 +269,7 @@ def run_ranking_evaluation(
         summarize_backtest("p_tradable_top_k_frictionless", free_results, free_trades, initial_capital),
         summarize_backtest("passive_equal_weight_sample_net", passive_results, passive_trades, initial_capital),
     ])
+    metrics = append_index_arm(metrics, net_results, initial_capital)
     test_quality = ranking_quality(test, test_selected)
     output_dir.mkdir(parents=True, exist_ok=True)
     prefix = "trend_tradability_ranking_{}".format(model_id)
@@ -221,7 +282,8 @@ def run_ranking_evaluation(
     manifest = {
         "model_id": model_id,
         "selected_top_k_validation_only": selected_top_k,
-        "selection_objective": "validation_net_total_return_then_lower_turnover",
+        "baseline_top_k": BASELINE_TOP_K,
+        "selection_objective": "selection_rule.select_configuration vs top_k={}".format(BASELINE_TOP_K),
         "test_ranking_quality": test_quality,
         "execution": {"signal_timing": "EOD rank at t, order at next session t+1", "min_holding_days": 5, "rebalance": "weekly", "max_positions": max_positions, "initial_capital": initial_capital, "validation_skipped_prices": validation_skipped, "test_skipped_prices": test_skipped},
         "paths": {"validation_grid": str(output_dir / (prefix + "_validation_grid.csv")), "test_scores": str(output_dir / (prefix + "_test_scores.csv")), "backtest_metrics": str(output_dir / (prefix + "_backtest_metrics.csv"))},

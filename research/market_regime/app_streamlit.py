@@ -3,6 +3,7 @@
 运行方式：streamlit run research/market_regime/app_streamlit.py
 """
 
+import json
 import sys
 from pathlib import Path
 
@@ -13,7 +14,6 @@ from plotly.subplots import make_subplots
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-MODEL_OUTPUT_DIR = PROJECT_ROOT / "output" / "datasets"
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -23,6 +23,31 @@ from research.market_regime.data_loader import (  # noqa: E402
     load_local_price_history,
 )
 from research.market_regime.labeler import MarketRegimeLabeler, RegimeLabelerConfig  # noqa: E402
+# The datasets live on the D: volume (the checkout is on FAT32); this app used
+# to hard-code the in-repo ``output/datasets``, which no longer exists -- so the
+# prediction tab was silently reading an empty directory.
+from research.market_regime.output_paths import DATASET_DIR  # noqa: E402
+from research.market_regime.stock_valuation_diagnostic import (  # noqa: E402
+    load_pool_membership,
+)
+
+
+MODEL_OUTPUT_DIR = Path(DATASET_DIR)
+
+# Valuation-state runs, written by index_valuation_diagnostic and
+# stock_valuation_diagnostic.  Prefix -> the manifest stem that identifies a run.
+VALUATION_RUNS = {
+    "index": "index_valuation",
+    "stock": "stock_valuation",
+}
+# Descriptive-only banner, shown with every valuation figure.  The predictive use
+# of valuation is closed (see docs/research/value_factor_regime_study_summary.md)
+# and this page must not imply otherwise.
+VALUATION_CAPTION = (
+    "估值状态为离线**描述型**指标：它说明当前价格处在自身历史或池内的什么位置，"
+    "不预测未来收益，也不是交易信号。分位越低越便宜；非正倍数（亏损、负现金流）"
+    "不参与排名，单独计数。"
+)
 
 
 REGIME_COLORS = {
@@ -155,6 +180,188 @@ def build_logistic_prediction_figure(data, predictions, up_threshold, down_thres
         legend={"orientation": "h", "y": 1.06},
     )
     return figure, aligned, up_signals, down_signals
+
+
+def stock_coverage_note(symbol, own_state, manifest):
+    """Why a requested symbol has no rows in this run.
+
+    "Not in the pool" and "in the pool, but no data" are different facts and
+    they send the reader to different files.  A pool member whose fetch failed
+    -- a 2025 delisting or merger -- is *in* the snapshot and absent from the
+    run, so reporting it as outside the pool is simply wrong.
+    """
+
+    pool_files = (manifest or {}).get("pool_files") or {}
+    resolved = {
+        name: str(path if Path(path).is_absolute() else PROJECT_ROOT / path)
+        for name, path in pool_files.items()
+    }
+    membership = load_pool_membership(resolved) if resolved else {}
+    label = " + ".join(sorted(membership)) or "股票池"
+    pool = set().union(*membership.values()) if membership else set()
+    covered = set(own_state["symbol"].astype(str).str.zfill(6))
+    symbol = str(symbol).zfill(6)
+
+    if symbol in pool:
+        missing = sorted(pool - covered)
+        return (
+            "{} 在池内（{} 快照），但本次运行的估值数据里没有它——通常是抓取失败"
+            "（退市 / 吸收合并 / 换代码）。该运行覆盖 {} 只，池内还缺 {} 只{}。".format(
+                symbol,
+                label,
+                len(covered),
+                len(missing),
+                "：" + ", ".join(missing) if missing else "",
+            )
+        )
+    return "{} 不在本次运行覆盖的池内（{} 快照）。".format(symbol, label)
+
+
+@cache_data
+def list_valuation_runs(kind):
+    """Run ids with a manifest for the given valuation layer, newest first."""
+
+    prefix = VALUATION_RUNS[kind]
+    runs = []
+    for path in MODEL_OUTPUT_DIR.glob("{}_manifest_*.json".format(prefix)):
+        run_id = path.stem[len(prefix) + len("_manifest_"):]
+        runs.append(run_id)
+    return sorted(runs)
+
+
+@cache_data
+def load_valuation_table(kind, run_id, table):
+    """One CSV from a valuation run, or an empty frame when it is missing."""
+
+    path = MODEL_OUTPUT_DIR / "{}_{}_{}.csv".format(VALUATION_RUNS[kind], table, run_id)
+    if not path.exists():
+        return pd.DataFrame()
+    frame = pd.read_csv(path, encoding="utf-8-sig", low_memory=False)
+    for column in ("date", "as_of", "period_end", "observed_date"):
+        if column in frame.columns:
+            frame[column] = pd.to_datetime(frame[column], errors="coerce")
+    return frame
+
+
+@cache_data
+def load_valuation_manifest(kind, run_id):
+    """Run metadata, or an empty dict when the manifest is missing or unreadable."""
+
+    path = MODEL_OUTPUT_DIR / "{}_manifest_{}.json".format(VALUATION_RUNS[kind], run_id)
+    if not path.is_file():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return {}
+
+
+BAND_LABELS = {
+    "very_cheap": "极便宜",
+    "cheap": "便宜",
+    "fair": "合理",
+    "expensive": "贵",
+    "very_expensive": "极贵",
+}
+BAND_COLORS = {
+    "very_cheap": "#1a9850",
+    "cheap": "#91cf60",
+    "fair": "#bdbdbd",
+    "expensive": "#fc8d59",
+    "very_expensive": "#d73027",
+}
+
+
+def build_anchor_cheapness_figure(anchors, window):
+    """Horizontal bars of cheapness per anchor, floored at 0 and coloured by band."""
+
+    subset = anchors.loc[anchors["window"].eq(window) & anchors["cheapness"].notna()].copy()
+    if subset.empty:
+        return None
+    subset = subset.sort_values("cheapness")
+    labels = ["{}  [{}]".format(row.anchor_label, row.scope) for row in subset.itertuples()]
+    figure = go.Figure(go.Bar(
+        x=subset["cheapness"],
+        y=labels,
+        orientation="h",
+        marker_color=[BAND_COLORS.get(band, "#bdbdbd") for band in subset["band"]],
+        text=["{}  {}".format(round(value, 3), BAND_LABELS.get(band, band))
+              for value, band in zip(subset["cheapness"], subset["band"])],
+        textposition="outside",
+        hovertext=["{} (as-of {})".format(level, as_of)
+                   for level, as_of in zip(subset["level"].round(4), subset["as_of"].dt.date)],
+    ))
+    figure.update_layout(
+        title="各锚点便宜度（1 = 自身历史最便宜，window={}）".format(window),
+        xaxis_title="便宜度",
+        xaxis_range=[0, 1.15],
+        height=max(320, 26 * len(subset) + 120),
+        margin=dict(l=10, r=10, t=60, b=40),
+    )
+    return figure
+
+
+def build_scope_summary_figure(summary):
+    """Median cheapness per scope with the anchor spread drawn as an error bar."""
+
+    subset = summary.loc[summary["median_cheapness"].notna()].sort_values("median_cheapness")
+    if subset.empty:
+        return None
+    figure = go.Figure(go.Bar(
+        x=subset["median_cheapness"],
+        y=["{} (n={})".format(scope, n) for scope, n in zip(subset["scope"], subset["n_anchors"])],
+        orientation="h",
+        marker_color="#4c78a8",
+        error_x=dict(
+            type="data",
+            symmetric=False,
+            array=subset["max_cheapness"] - subset["median_cheapness"],
+            arrayminus=subset["median_cheapness"] - subset["min_cheapness"],
+            color="#333333",
+        ),
+        text=["分歧 {:.2f}".format(spread) for spread in subset["spread"]],
+        textposition="outside",
+    ))
+    windows = sorted(set(subset["window"])) if "window" in subset.columns else []
+    figure.update_layout(
+        title="按口径的中位便宜度（横线为锚点分歧带，window={}）".format(
+            "/".join(str(value) for value in windows) or "?"),
+        xaxis_title="便宜度",
+        xaxis_range=[0, 1.25],
+        height=max(300, 30 * len(subset) + 120),
+        margin=dict(l=10, r=10, t=60, b=40),
+    )
+    return figure
+
+
+def build_symbol_own_state_figure(own_state, symbol, window):
+    """One symbol's own-history percentile per metric over time."""
+
+    subset = own_state.loc[own_state["window"].eq(window)].copy()
+    if subset.empty:
+        return None
+    figure = go.Figure()
+    for metric, group in subset.groupby("metric"):
+        group = group.sort_values("date")
+        figure.add_trace(go.Scatter(
+            x=group["date"],
+            y=group["cheapness"],
+            mode="lines",
+            name=metric,
+            hovertemplate="%{x|%Y-%m-%d}<br>便宜度 %{y:.3f}<extra>" + metric + "</extra>",
+        ))
+    for cut, color in ((0.10, "#1a9850"), (0.30, "#91cf60"), (0.70, "#fc8d59"), (0.90, "#d73027")):
+        figure.add_hline(y=cut, line_dash="dot", line_color=color, opacity=0.5)
+    figure.update_layout(
+        title="{} 自身历史便宜度（window={}，虚线为分档阈值）".format(symbol, window),
+        yaxis_title="便宜度（1 = 自身历史最便宜）",
+        yaxis_range=[0, 1],
+        height=420,
+        margin=dict(l=10, r=10, t=60, b=40),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+    )
+    return figure
 
 
 def build_regime_figure(data, segments, pivots):
@@ -315,8 +522,8 @@ def main():
     st.plotly_chart(build_regime_figure(selected, segments, pivots), width="stretch")
     st.caption("橙色菱形表示最终阶段边界；叉号表示标签发生状态切换的拐点。")
 
-    overview, segment_tab, daily_tab, pivot_tab, prediction_tab, audit_tab = st.tabs(
-        ["阶段概览", "阶段表", "逐日状态", "拐点事件", "模型预测", "数据审计"]
+    overview, segment_tab, daily_tab, pivot_tab, prediction_tab, valuation_tab, audit_tab = st.tabs(
+        ["阶段概览", "阶段表", "逐日状态", "拐点事件", "模型预测", "估值状态", "数据审计"]
     )
     with overview:
         summary = segments.copy()
@@ -372,6 +579,124 @@ def main():
                 "logistic_predictions_{}_{}.csv".format(logistic_run, symbol),
                 "text/csv",
             )
+    with valuation_tab:
+        st.caption(VALUATION_CAPTION)
+
+        index_runs = list_valuation_runs("index")
+        st.subheader("指数 / 全市场")
+        if not index_runs:
+            st.info("未找到 index_valuation_manifest_*.json。先运行 "
+                    "`python -m research.market_regime.index_valuation_diagnostic`。")
+        else:
+            index_run = st.selectbox("指数估值运行", index_runs, index=0)
+            anchors = load_valuation_table("index", index_run, "anchors")
+            summary = load_valuation_table("index", index_run, "summary")
+            if anchors.empty:
+                st.info("该运行没有锚点表。")
+            else:
+                available_windows = [w for w in ["36m", "60m", "120m", "all"] if anchors["window"].eq(w).any()]
+                window = st.radio("窗口", available_windows or ["60m"], horizontal=True,
+                                  help="分位随窗口变化，标签也会变。窗口未填满时不给分位。")
+                anchor_figure = build_anchor_cheapness_figure(anchors, window)
+                if anchor_figure is not None:
+                    st.plotly_chart(anchor_figure, width="stretch")
+                # The scope summary is exported at one window only (the run's
+                # ``--summary-window``); the figure must say which, or a reader
+                # comparing it against a different radio selection would be
+                # comparing two windows without knowing it.
+                manifest = load_valuation_manifest("index", index_run)
+                summary_window = str(manifest.get("summary_window") or "60m")
+                summary_figure = build_scope_summary_figure(
+                    summary.loc[summary["window"].eq(summary_window)]
+                    if not summary.empty else summary
+                )
+                if summary_figure is not None:
+                    st.plotly_chart(summary_figure, width="stretch")
+                    if summary_window != window:
+                        st.caption("上方口径摘要固定在 window={}，与当前选择的 {} 不同——"
+                                   "两者不可直接比较。".format(summary_window, window))
+                st.caption(
+                    "注意不同 `scope` 是不同总体（hs300 / market / board_*），不可跨口径拼成一句结论。"
+                    "as-of 为该锚点真实最新观测日，不是月末标签。"
+                )
+                st.dataframe(anchors.loc[:, ["anchor_label", "scope", "window", "level", "as_of",
+                                             "percentile", "n_obs", "band", "period_end"]],
+                             width="stretch", hide_index=True)
+                st.download_button("下载锚点状态 CSV",
+                                   anchors.to_csv(index=False).encode("utf-8-sig"),
+                                   "index_valuation_anchors_{}.csv".format(index_run), "text/csv")
+
+        stock_runs = list_valuation_runs("stock")
+        st.divider()
+        st.subheader("个股：自身历史 vs 池内")
+        if not stock_runs:
+            st.info("未找到 stock_valuation_manifest_*.json。先运行 "
+                    "`python -m research.market_regime.stock_valuation_diagnostic`。")
+        else:
+            stock_run = st.selectbox("个股估值运行", stock_runs, index=0)
+            own_state = load_valuation_table("stock", stock_run, "own_state")
+            composite = load_valuation_table("stock", stock_run, "composite_state")
+            symbol_own = own_state.loc[
+                own_state["symbol"].astype(str).str.zfill(6).eq(symbol)
+            ] if not own_state.empty else own_state
+
+            if own_state.empty:
+                st.info("该运行没有个股状态表。")
+            elif symbol_own.empty:
+                st.info(stock_coverage_note(
+                    symbol, own_state, load_valuation_manifest("stock", stock_run)))
+            else:
+                windows = [w for w in ["36m", "60m", "all"] if symbol_own["window"].eq(w).any()]
+                chosen = st.radio("窗口", windows or ["36m"], horizontal=True,
+                                  help="个股数据自 2018 起，120m 窗口填不满，因此不提供。")
+                figure = build_symbol_own_state_figure(symbol_own, symbol, chosen)
+                if figure is not None:
+                    st.plotly_chart(figure, width="stretch")
+                latest = symbol_own.loc[symbol_own["window"].eq(chosen)].sort_values("date").groupby("metric").tail(1)
+                # ``date`` is the month-end bucket label, which for an in-progress
+                # month is a date that has not happened yet; ``observed_date`` is
+                # when the data actually exists.  Both go on screen.
+                wanted = ["metric", "observed_date", "date", "level", "percentile_own",
+                          "n_obs", "band_own", "undefined"]
+                display = latest.loc[:, [column for column in wanted if column in latest.columns]].copy()
+                display = display.rename(columns={"observed_date": "as_of", "date": "period_end"})
+                display["band_own"] = display["band_own"].map(lambda value: BAND_LABELS.get(value, value))
+                st.dataframe(display, width="stretch", hide_index=True)
+                undefined_latest = latest.loc[latest["undefined"].astype(bool)]
+                if not undefined_latest.empty:
+                    st.warning("倍数非正，未参与排名：{}".format(
+                        ", ".join(
+                            "{} ({})".format(
+                                row.metric,
+                                (row.observed_date if pd.notna(row.observed_date) else row.date).date(),
+                            )
+                            for row in undefined_latest.itertuples()
+                        )))
+                st.caption(
+                    "`n_obs` 是该分位实际使用的样本月数；窗口未填满时 `percentile_own` 为空。"
+                    "亏损股的 PE 被排除而非当作'极便宜'，其占比见下方非正倍数统计。"
+                )
+                if not composite.empty:
+                    symbol_composite = composite.loc[
+                        composite["symbol"].astype(str).str.zfill(6).eq(symbol) & composite["window"].eq(chosen)
+                    ].sort_values("date")
+                    if not symbol_composite.empty:
+                        st.caption("多指标合成（各指标便宜度的中位数）：最新 {}，投票指标数 {}".format(
+                            BAND_LABELS.get(symbol_composite["band_composite"].iloc[-1],
+                                            symbol_composite["band_composite"].iloc[-1]),
+                            int(symbol_composite["n_metrics"].iloc[-1])))
+                st.download_button("下载该标的状态 CSV",
+                                   symbol_own.to_csv(index=False).encode("utf-8-sig"),
+                                   "stock_valuation_own_{}_{}.csv".format(stock_run, symbol), "text/csv")
+
+            undefined = load_valuation_table("stock", stock_run, "undefined_share")
+            if not undefined.empty:
+                recent = undefined.loc[undefined["date"].eq(undefined["date"].max())]
+                as_of = recent["observed_date"].max() if "observed_date" in recent.columns else pd.NaT
+                st.caption("最近一期（数据截至 {}）非正倍数占比".format(
+                    (as_of if pd.notna(as_of) else recent["date"].max()).date()))
+                st.dataframe(recent.loc[:, ["metric", "n_symbols", "n_undefined", "share_undefined"]],
+                             width="stretch", hide_index=True)
     with audit_tab:
         audit_display = {key: value for key, value in audit.items() if key != "parameters"}
         st.dataframe(pd.DataFrame([audit_display]), width="stretch", hide_index=True)

@@ -8,6 +8,11 @@ from typing import Dict, Optional, Sequence
 import numpy as np
 import pandas as pd
 
+from research.market_regime.passive_benchmark import (
+    DEFAULT_BENCHMARK_FILE,
+    append_index_arm,
+    benchmark_comparison,
+)
 from research.market_regime.probability_trade_evaluation import (
     _run_engine,
     make_passive_strategy,
@@ -21,11 +26,95 @@ from research.market_regime.tradability_ranking_evaluation import (
     build_rank_market_data,
     make_rank_strategy,
     select_top_k,
+    select_top_k_on_validation,
 )
 from research.market_regime.trade_outcome_model import target_columns
+from research.market_regime.output_paths import DATASET_DIR
 
 
 SCORE_COLUMN = "entry_score"
+
+#: The basket width each model is currently published with -- i.e. what is on
+#: disk today.  The selection rule treats that incumbent as the bar a candidate
+#: has to beat, so a re-run has to *state* it rather than rediscover it:
+#: rediscovering it from the grid is exactly the ``sort_values(...).iloc[0]``
+#: behaviour being removed, and reading it back out of this module's previous
+#: output would fold the last run's result into the next one.
+#:
+#: Transcribed from the ``trade_outcome_ranking_*_manifest.json`` files in the
+#: dataset directory on 2026-09-18.  Every value here was picked by the retired
+#: rule, so this is a statement of fact about the incumbent, not a claim that
+#: the incumbent is right.
+#:
+#: Re-checked against all eight published grids after wiring the rule in: every
+#: one returns the recorded width unchanged, so no downstream artifact needs
+#: regenerating.  Read that as a no-op, not as a verdict -- each published value
+#: *is* its grid's argmax by construction, and gate 0 requires beating the
+#: incumbent outright, so on exactly these grids the rule cannot move and the two
+#: rules cannot disagree.  The check confirms the wiring runs on real grids; it
+#: says nothing about whether the widths are good, because these grids cannot
+#: ask.  The rule's value is prospective -- on a fresh grid whose incumbent is
+#: not the argmax it can refuse a degenerate narrower basket, which is the case
+#: the published grids never present.
+PUBLISHED_TOP_K = {
+    "hs300_ewbaseline_outcome": 0.10,
+    "hs300_excess_short_outcome": 0.10,
+    "hs300_excess_v1_outcome": 0.10,
+    "hs300_pit_outcome": 0.05,
+    "hs300_trade_outcome_v1": 0.10,
+    "v1_robustness_walkforward": 0.05,
+    "zz1000_excess_v1_outcome": 0.10,
+    "zz1000_pit_outcome": 0.10,
+}
+
+
+def resolve_baseline_top_k(model_id: str, override: Optional[float] = None) -> float:
+    """Return the incumbent basket width that a re-run has to beat.
+
+    Fails loudly on an unknown model id rather than guessing.  A silent default
+    would put a new pool's candidates in front of some other pool's bar, and the
+    rule would then report "no change" -- which reads as *evidence the incumbent
+    is sound* when in fact nothing was tested against it.
+    """
+
+    if override is not None:
+        return float(override)
+    if model_id not in PUBLISHED_TOP_K:
+        raise ValueError(
+            "No published top_k on record for model_id={!r}; pass baseline_top_k "
+            "explicitly so the incumbent bar is stated rather than guessed. "
+            "Recorded ids: {}".format(model_id, sorted(PUBLISHED_TOP_K))
+        )
+    return float(PUBLISHED_TOP_K[model_id])
+
+
+def published_top_k(dataset_dir: Path, model_id: str) -> float:
+    """The basket width a *published* run actually used, read from its manifest.
+
+    This is the number a **replication** has to use -- a random null arm, a
+    forward arm -- because the two sides are only like-for-like at the same
+    width, and a mismatch does not announce itself: it arrives as apparent
+    alpha, or as apparent decay.
+
+    Read here rather than through :func:`resolve_baseline_top_k`, and note that
+    the split is deliberate.  The selector must *not* consult this function:
+    it is deciding whether to move off the incumbent, and folding its own last
+    answer back into the next run is how a selector starts ratcheting.  A
+    replica has the opposite job -- reproduce the published configuration
+    exactly -- so for it the manifest is the correct source of truth.
+
+    Raises rather than defaulting, and names the file it wanted.
+    """
+
+    path = dataset_dir / "trade_outcome_ranking_{}_manifest.json".format(model_id)
+    if not path.exists():
+        raise ValueError(
+            "No published ranking manifest for model_id={!r} at {}; the basket "
+            "width cannot be inferred, and a replica drawn at a guessed width is "
+            "not comparable to the published arm.".format(model_id, path)
+        )
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    return float(manifest["selected_top_k_validation_only"])
 
 
 def load_outcome_scores(dataset_dir: Path, model_id: str, split: str, horizon: int) -> pd.DataFrame:
@@ -72,7 +161,16 @@ def evaluate_outcome_validation_grid(
     max_positions: int,
     config_path: str,
 ) -> pd.DataFrame:
-    """Choose Top-K by validation net return after applying A-share constraints."""
+    """Evaluate every grid width on validation, sorted best-return-first.
+
+    The sort is a *view* for reading the table and for the CSV on disk -- it is
+    not a selection.  Picking ``iloc[0]`` here would always move off the
+    incumbent, because a narrower basket mechanically raises both return and
+    turnover, so the grid argmax is a construction artefact rather than evidence
+    that the incumbent is wrong.  Selection is
+    :func:`tradability_ranking_evaluation.select_top_k_on_validation`, which
+    requires the incumbent to be beaten outright on every gate.
+    """
 
     start_date, end_date = validation_scores["date"].min(), validation_scores["date"].max()
     target_notional = initial_capital / max_positions
@@ -110,8 +208,16 @@ def run_outcome_ranking_evaluation(
     max_positions: int = 20,
     price_history_dir: Optional[str] = None,
     config_path: str = "config/settings.yaml",
+    benchmark_file: str = DEFAULT_BENCHMARK_FILE,
+    baseline_top_k: Optional[float] = None,
 ):
-    """Select a validation Top-K and evaluate its direct score on the test split."""
+    """Select a validation Top-K and evaluate its direct score on the test split.
+
+    ``baseline_top_k`` is the incumbent width the candidates must beat; it
+    defaults to the published value recorded in :data:`PUBLISHED_TOP_K` and may
+    be overridden explicitly.  An unknown ``model_id`` with no override raises
+    rather than guessing.
+    """
 
     validation = load_outcome_scores(dataset_dir, model_id, "validation", horizon)
     test = load_outcome_scores(dataset_dir, model_id, "test", horizon)
@@ -121,7 +227,9 @@ def run_outcome_ranking_evaluation(
     validation_grid = evaluate_outcome_validation_grid(
         validation, validation_raw, horizon, initial_capital, max_positions, config_path
     )
-    selected_top_k = float(validation_grid.iloc[0]["top_k"])
+    incumbent_top_k = resolve_baseline_top_k(model_id, baseline_top_k)
+    print("\nbaseline top_k (incumbent to beat): {}".format(incumbent_top_k))
+    selected_top_k = select_top_k_on_validation(validation_grid, incumbent_top_k)
     test_selected = select_top_k(test, selected_top_k, SCORE_COLUMN)
     test_raw, test_skipped = build_rank_market_data(test, price_history_dir, SCORE_COLUMN)
     prepared = apply_rank_selection(test_raw, test, test_selected)
@@ -155,6 +263,7 @@ def run_outcome_ranking_evaluation(
             summarize_backtest("passive_equal_weight_sample_net", passive_results, passive_trades, initial_capital),
         ]
     )
+    metrics = append_index_arm(metrics, net_results, initial_capital, benchmark_file)
     output_dir.mkdir(parents=True, exist_ok=True)
     prefix = "trade_outcome_ranking_{}".format(model_id)
     validation_grid.to_csv(output_dir / (prefix + "_validation_grid.csv"), index=False)
@@ -170,8 +279,10 @@ def run_outcome_ranking_evaluation(
         "horizon": int(horizon),
         "score_column": SCORE_COLUMN,
         "selected_top_k_validation_only": selected_top_k,
-        "selection_objective": "validation_net_total_return_then_lower_turnover",
+        "baseline_top_k": incumbent_top_k,
+        "selection_objective": "selection_rule.select_configuration vs top_k={}".format(incumbent_top_k),
         "test_forward_outcome_quality": outcome_quality(test, test_selected, horizon),
+        "test_return_vs_benchmarks": benchmark_comparison(metrics),
         "execution": {
             "signal_timing": "EOD score at t, order at next session t+1",
             "min_holding_days": int(horizon),
@@ -189,18 +300,26 @@ def run_outcome_ranking_evaluation(
 
 def main(argv: Optional[Sequence[str]] = None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--dataset-dir", default="output/datasets")
+    parser.add_argument("--dataset-dir", default=DATASET_DIR)
     parser.add_argument("--model-id", default="hs300_trade_outcome_v1")
-    parser.add_argument("--output-dir", default="output/datasets")
+    parser.add_argument("--output-dir", default=DATASET_DIR)
     parser.add_argument("--horizon", type=int, default=10)
     parser.add_argument("--initial-capital", type=float, default=500000.0)
     parser.add_argument("--max-positions", type=int, default=20)
     parser.add_argument("--price-history-dir", default=None)
     parser.add_argument("--config-path", default="config/settings.yaml")
+    parser.add_argument("--benchmark-file", default=DEFAULT_BENCHMARK_FILE)
+    parser.add_argument(
+        "--baseline-top-k",
+        type=float,
+        default=None,
+        help="Incumbent basket width to beat; defaults to the published value for --model-id",
+    )
     args = parser.parse_args(argv)
     manifest = run_outcome_ranking_evaluation(
         Path(args.dataset_dir), args.model_id, Path(args.output_dir), args.horizon, args.initial_capital,
-        args.max_positions, args.price_history_dir, args.config_path,
+        args.max_positions, args.price_history_dir, args.config_path, args.benchmark_file,
+        args.baseline_top_k,
     )
     print("Selected validation Top-K={:.2%}".format(manifest["selected_top_k_validation_only"]))
 

@@ -492,7 +492,7 @@ class BacktestEngine:
         Build optimized data structures for faster access during backtest.
         
         Returns:
-            tuple: (date_to_symbols, price_matrix, signal_matrix)
+            tuple: (date_to_symbols, price_matrix, signal_matrix, valuation_matrix)
         """
         # Build date to symbols mapping
         date_to_symbols = {}
@@ -506,9 +506,14 @@ class BacktestEngine:
         price_dict = {}
         for symbol, df in data.items():
             price_dict[symbol] = df['close']
-        
+
         price_matrix = pd.DataFrame(price_dict)
-        
+        # Valuation-only view: carry the last valid close forward through days a
+        # name has no quote (halts, missing bars).  ``price_matrix`` itself stays
+        # untouched -- a name without a quote cannot be traded, so execution and
+        # signal timing must keep seeing the gap.
+        valuation_matrix = price_matrix.ffill()
+
         # Build signal matrix if signals exist
         signal_dict = {}
         for symbol, df in data.items():
@@ -516,9 +521,9 @@ class BacktestEngine:
                 signal_dict[symbol] = df['signal']
         
         signal_matrix = pd.DataFrame(signal_dict) if signal_dict else None
-        
-        return date_to_symbols, price_matrix, signal_matrix
-    
+
+        return date_to_symbols, price_matrix, signal_matrix, valuation_matrix
+
     def run(
         self,
         data: Dict[str, pd.DataFrame],
@@ -532,7 +537,9 @@ class BacktestEngine:
         self._prepare_stop_indicators(data)
         
         # Build optimized data structures
-        date_to_symbols, price_matrix, signal_matrix = self._build_optimized_data_structures(data)
+        date_to_symbols, price_matrix, signal_matrix, valuation_matrix = (
+            self._build_optimized_data_structures(data)
+        )
 
         all_dates = sorted(set(
             date for df in data.values() 
@@ -575,7 +582,11 @@ class BacktestEngine:
             time_dic["trades"] += time() - start_time
             
             start_time = time()
-            portfolio_value = self._calculate_portfolio_value(prices)
+            if date in valuation_matrix.index:
+                valuation_prices = valuation_matrix.loc[date].dropna().to_dict()
+            else:
+                valuation_prices = {}
+            portfolio_value = self._calculate_portfolio_value(valuation_prices)
             time_dic["portfolio"] += time() - start_time
             
             start_time = time()
@@ -764,7 +775,16 @@ class BacktestEngine:
                     })
     
     def _calculate_portfolio_value(self, prices: Dict[str, float]) -> float:
-        """Calculate current portfolio value using latest close prices."""
+        """Value the book at the given marks.
+
+        ``prices`` must be the *valuation* marks, not the execution quotes: see
+        ``_build_optimized_data_structures``.  Every held name is expected to be
+        present -- a name that is silently dropped here disappears from the
+        equity curve for the day, which shows up as a one-day phantom loss
+        proportional to that name's weight (understating Sharpe, overstating
+        max drawdown).  A name that never had a quote at all is skipped rather
+        than marked at zero.
+        """
         value = self.cash
         for symbol, shares in self.positions.items():
             if symbol in prices:
