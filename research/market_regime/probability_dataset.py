@@ -170,6 +170,7 @@ def split_time_series_samples(
     validation_end: Union[str, pd.Timestamp] = DEFAULT_VALIDATION_END,
     test_start: Union[str, pd.Timestamp] = DEFAULT_TEST_START,
     embargo_days: int = DEFAULT_EMBARGO_DAYS,
+    train_start: Optional[Union[str, pd.Timestamp]] = None,
     show_progress: bool = False,
 ) -> pd.DataFrame:
     """Assign train/validation/test partitions with label purge and embargo.
@@ -178,6 +179,12 @@ def split_time_series_samples(
     split are purged.  The first ``embargo_days`` trading sessions of
     validation and test are excluded per symbol, matching the plan's required
     feature-lookback plus label-horizon buffer.
+
+    ``train_start`` truncates the *front* of the training window and nothing
+    else: validation and test are untouched, and the default ``None`` leaves
+    the mask exactly as it was before the parameter existed.  It exists because
+    a pool whose index was published mid-history would otherwise train on the
+    back-filled reconstruction that precedes publication.
     """
 
     if embargo_days < 0:
@@ -193,6 +200,9 @@ def split_time_series_samples(
     test_start_date = _as_timestamp(test_start)
     if not train_end_date < validation_start_date <= validation_end_date < test_start_date:
         raise ValueError("Split boundaries must satisfy train < validation < test")
+    train_start_date = _as_timestamp(train_start) if train_start is not None else None
+    if train_start_date is not None and not train_start_date <= train_end_date:
+        raise ValueError("train_start must not be after train_end")
 
     result.loc[result["target"] == "unavailable", "split_reason"] = "label_unavailable"
     usable = result["target"] != "unavailable"
@@ -214,6 +224,8 @@ def split_time_series_samples(
             & (subset["date"] <= train_end_date)
             & (subset["label_available_date"] < validation_start_date)
         )
+        if train_start_date is not None:
+            train_mask = train_mask & (subset["date"] >= train_start_date)
         validation_mask = (
             usable.loc[index]
             & (subset["date"] >= validation_start_date)
@@ -450,6 +462,7 @@ def build_dataset_report(
     validation_end: Union[str, pd.Timestamp] = DEFAULT_VALIDATION_END,
     test_start: Union[str, pd.Timestamp] = DEFAULT_TEST_START,
     embargo_days: int = DEFAULT_EMBARGO_DAYS,
+    train_start: Optional[Union[str, pd.Timestamp]] = None,
     max_candidates: int = 30,
     correlation_threshold: float = 0.85,
     show_progress: bool = False,
@@ -458,7 +471,8 @@ def build_dataset_report(
 
     samples = build_future_trend_samples(feature_panel, events, horizon, min_event_confidence, show_progress)
     split_samples = split_time_series_samples(
-        samples, train_end, validation_start, validation_end, test_start, embargo_days, show_progress
+        samples, train_end, validation_start, validation_end, test_start, embargo_days,
+        train_start, show_progress
     )
     if candidate_feature_effects is not None and not candidate_feature_effects.empty:
         candidate_detail, event_candidates = select_candidate_features_from_effects(candidate_feature_effects, show_progress=show_progress)
@@ -665,6 +679,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--horizon", type=int, default=DEFAULT_HORIZON)
     parser.add_argument("--min-event-confidence", type=float, default=0.0)
     parser.add_argument("--train-end", default=DEFAULT_TRAIN_END)
+    parser.add_argument("--train-start", default=None,
+                        help="Truncate the front of the training window (default: unbounded)")
     parser.add_argument("--validation-start", default=DEFAULT_VALIDATION_START)
     parser.add_argument("--validation-end", default=DEFAULT_VALIDATION_END)
     parser.add_argument("--test-start", default=DEFAULT_TEST_START)
@@ -683,6 +699,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         horizon=args.horizon,
         min_event_confidence=args.min_event_confidence,
         train_end=args.train_end,
+        train_start=args.train_start,
         validation_start=args.validation_start,
         validation_end=args.validation_end,
         test_start=args.test_start,
@@ -704,6 +721,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "correlation_threshold": args.correlation_threshold,
         "candidate_selection_period": "events through {} only".format(args.train_end),
     }
+    # Only recorded when set, so that an unmodified run reproduces the older
+    # manifest byte for byte -- the regression check for this parameter is
+    # exactly that equality.
+    if args.train_start is not None:
+        metadata["train_start"] = args.train_start
     paths = export_dataset_report(report, args.output_dir, args.run_id, metadata, show_progress)
     print("Prepared train/validation/test samples: {}/{}/{}".format(
         len(report["train_samples"]), len(report["validation_samples"]), len(report["test_samples"])

@@ -8,6 +8,7 @@ from research.market_regime.passive_benchmark import (
     align_levels,
     append_index_arm,
     benchmark_comparison,
+    index_arm_name,
     index_arm_row,
     index_window_return,
 )
@@ -160,3 +161,47 @@ def test_benchmark_comparison_reports_both_excesses_and_the_sample_gap():
 def test_benchmark_comparison_names_the_missing_index_arm():
     with raises(ValueError, match="hs300_index_buy_hold"):
         benchmark_comparison(make_metrics_table(), strategy="top_k_net")
+
+
+def test_the_index_arm_name_follows_the_benchmark_file():
+    """Every pool's metrics table used to name its own index "hs300"."""
+
+    assert index_arm_name("data/benchmarks/000300.csv") == "hs300_index_buy_hold"
+    assert index_arm_name("data/benchmarks/000852.csv") == "zz1000_index_buy_hold"
+    assert index_arm_name("data/benchmarks/000905.csv") == "zz500_index_buy_hold"
+
+
+def test_an_unrecognised_benchmark_file_falls_back_to_the_default_name():
+    """A caller threading no file through is an 000300 one, not a new index."""
+
+    assert index_arm_name("data/benchmarks/399905.csv") == INDEX_ARM_NAME
+    assert index_arm_name() == INDEX_ARM_NAME
+
+
+def test_append_index_arm_names_the_row_after_the_file_it_loaded():
+    equity = pd.DataFrame({"portfolio_value": [500000.0] * len(SESSIONS)}, index=SESSIONS)
+
+    table = append_index_arm(make_metrics_table(), equity, initial_capital=500000.0,
+                             benchmark_file="data/benchmarks/000905.csv", levels=LEVELS)
+
+    assert table["strategy"].tolist()[-1] == "zz500_index_buy_hold"
+
+
+def test_the_written_row_and_the_lookup_agree_for_a_non_hs300_pool():
+    """The defect this closes: both were hardcoded to the same wrong string, so
+    the excess was still computable -- the table just described the wrong index.
+    Writing and looking up must therefore be derived from one source."""
+
+    equity = pd.DataFrame({"portfolio_value": [500000.0] * len(SESSIONS)}, index=SESSIONS)
+    table = append_index_arm(make_metrics_table(), equity, initial_capital=500000.0,
+                             benchmark_file="data/benchmarks/000852.csv", levels=LEVELS)
+
+    comparison = benchmark_comparison(table, strategy="top_k_net",
+                                      benchmark_file="data/benchmarks/000852.csv")
+
+    assert np.isclose(comparison["net_total_return_excess_vs_index"], 0.40 - (3300.0 / 3000.0 - 1.0))
+    # And the same table is a hard error when looked up as another pool's index:
+    # the message names the arm that is *absent*, i.e. the one 000905 implies.
+    with raises(ValueError, match="zz500_index_buy_hold"):
+        benchmark_comparison(table, strategy="top_k_net",
+                             benchmark_file="data/benchmarks/000905.csv")

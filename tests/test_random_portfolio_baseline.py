@@ -13,9 +13,11 @@ Two things are worth pinning, and the second is the one that actually rotted:
 1. The width is **read from the published manifest**, not defaulted and not
    looked up in the selector's registry (they are different jobs -- see
    :func:`published_top_k`), and a missing manifest raises.
-2. ``ARMS`` agrees with ``forward_2026_backtest.POOLS``.  The root cause was the
-   same fact stored in two modules, so a test that only checks ``ARMS`` in
-   isolation would not have caught the drift.
+2. ``ARMS`` contains every pool ``forward_2026_backtest.POOLS`` knows.  The root
+   cause was the same fact stored in two modules, so a test that only checks
+   ``ARMS`` in isolation would not have caught the drift.  The containment is
+   one-way: the forward registry is the narrower one (中证500 has no 2026
+   forward data yet), so it may lag ``ARMS`` but must never lead it.
 """
 
 import inspect
@@ -71,13 +73,26 @@ def test_arms_point_at_the_current_pools_not_the_retired_static_ones():
     assert rpb.ARMS == {
         "hs300": "hs300_pit_outcome",
         "zz1000": "zz1000_pit_outcome",
+        "zz500": "zz500_pit_outcome",
     }
 
 
 def test_arms_agrees_with_the_forward_backtest_pools():
-    """The drift was two copies of one fact disagreeing, so compare the copies."""
+    """The drift was two copies of one fact disagreeing, so compare the copies.
 
-    assert rpb.ARMS == {pool: spec["model_id"] for pool, spec in POOLS.items()}
+    They have since diverged on purpose, and only in one direction.  ``ARMS`` is
+    the *null-draw* registry: a pool belongs once it has a published model to
+    draw a like-for-like null against.  ``forward_2026_backtest.POOLS`` is the
+    2026 *forward-tracking* registry, and a pool belongs there only once forward
+    data exists for it -- ``forward_2026/index_weight/`` has no 000905 snapshot,
+    so 中证500 is deliberately absent.  What must hold is that the narrower
+    registry cannot know a pool the wider one does not, which is the direction
+    the original drift broke.
+    """
+
+    assert set(POOLS) <= set(rpb.ARMS)
+    for pool, spec in POOLS.items():
+        assert rpb.ARMS[pool] == spec["model_id"]
 
 
 def test_the_default_width_is_unset_rather_than_a_constant():

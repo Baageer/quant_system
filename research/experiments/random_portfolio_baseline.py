@@ -101,6 +101,7 @@ from research.market_regime.trade_outcome_ranking_evaluation import (
 ARMS = {
     "hs300": "hs300_pit_outcome",
     "zz1000": "zz1000_pit_outcome",
+    "zz500": "zz500_pit_outcome",
 }
 
 REPORT_METRICS = (

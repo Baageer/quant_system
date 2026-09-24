@@ -12,8 +12,10 @@ more than it sounds: the excess label voids any row whose *benchmark* level is
 missing, so the benchmark's start date silently becomes the training set's start
 date.  暂时用 2018 起的数据会把训练集从 14 年压到 1 年。
 
-This script bridges that gap: fetch the missing span from akshare and merge it
-with whatever snapshots already sit on disk.
+This script bridges that gap: fetch the missing span and merge it with whatever
+snapshots already sit on disk.  ``--source`` picks the remote: ``akshare``
+(the original default) or ``tushare``, which is the fallback when akshare's
+eastmoney endpoint is unreachable from the network at hand.
 
 Only ``close`` is load-bearing downstream (see ``add_window_best_labels``); the
 other OHLCV columns are carried for schema compatibility.
@@ -38,6 +40,10 @@ BENCHMARK_COLUMNS = ["date", "index_code", "index_name", "open", "close",
 DEFAULT_OUTPUT_DIR = "data/benchmarks"
 FETCH_ATTEMPTS = 3
 FETCH_BACKOFF_SECONDS = 3.0
+# ``index_daily`` returns at most 4000 rows per call, so a long span has to be
+# split into chunks smaller than that (4 years ~= 1000 sessions).
+TUSHARE_CHUNK_YEARS = 4
+TUSHARE_SLEEP_SECONDS = 0.4
 
 
 def normalize_index_frame(frame: pd.DataFrame, code: str, name: str) -> pd.DataFrame:
@@ -144,6 +150,60 @@ def fetch_remote_range(code: str, start: str, end: str) -> pd.DataFrame:
     )
 
 
+def year_spans(start: str, end: str, years: int) -> List[tuple]:
+    """Split ``[start, end]`` (``YYYYMMDD``) into ``years``-long chunks."""
+
+    first, last = pd.Timestamp(start), pd.Timestamp(end)
+    if last < first:
+        raise ValueError("end {} is before start {}".format(end, start))
+    spans = []
+    cursor = first
+    while cursor <= last:
+        span_end = min(cursor + pd.DateOffset(years=years) - pd.Timedelta(days=1), last)
+        spans.append((cursor.strftime("%Y%m%d"), span_end.strftime("%Y%m%d")))
+        cursor = span_end + pd.Timedelta(days=1)
+    return spans
+
+
+def fetch_remote_range_tushare(code: str, start: str, end: str) -> pd.DataFrame:
+    """Fetch ``[start, end]`` from tushare ``index_daily`` instead of akshare.
+
+    akshare's eastmoney endpoint (``stock_zh_index_daily_em``) refuses the
+    connection from some networks, which matters here because the benchmark's
+    start date silently becomes the training set's start date.  ``index_daily``
+    goes through the shared authenticated POST in
+    :mod:`research.experiments.fetch_tushare_daily_basic`, so it needs nothing
+    beyond the ``TS_TOKEN`` already in ``.env``.
+
+    Returns the same column names akshare would, so the frame flows through
+    :func:`normalize_index_frame` unchanged.
+    """
+
+    from research.experiments.fetch_tushare_daily_basic import call_api, read_token
+
+    ts_code = "{}.SH".format(code) if code.startswith(("0", "6")) else "{}.SZ".format(code)
+    token = read_token()
+    frames = []
+    for span_start, span_end in year_spans(start, end, TUSHARE_CHUNK_YEARS):
+        payload = call_api("index_daily", token, {
+            "ts_code": ts_code, "start_date": span_start, "end_date": span_end,
+        })
+        if payload is None or not len(payload):
+            print("[fetch] {} empty [{}.{}]".format(ts_code, span_start, span_end), flush=True)
+            continue
+        frames.append(payload.rename(columns={"trade_date": "date", "vol": "volume"}))
+        time.sleep(TUSHARE_SLEEP_SECONDS)
+    if not frames:
+        raise RuntimeError(
+            "tushare index_daily returned nothing for {} [{}..{}]".format(ts_code, start, end)
+        )
+    merged = pd.concat(frames, ignore_index=True)
+    # ``trade_date`` is a YYYYMMDD string; without an explicit format pandas
+    # would have to guess, and guessing is how a date column silently shifts.
+    merged["date"] = pd.to_datetime(merged["date"], format="%Y%m%d", errors="coerce")
+    return merged
+
+
 def write_benchmark(frame: pd.DataFrame, path: Path) -> Path:
     """Write in ``000300.csv``'s exact style: BOM + every field quoted."""
 
@@ -160,6 +220,8 @@ def parse_args(argv=None):
     parser.add_argument("--end", default="", help="fetch end, YYYYMMDD (default: today)")
     parser.add_argument("--snapshot", default="data/raw/akshare/index_history",
                         help="directory of existing {code}_*.csv snapshots to merge in")
+    parser.add_argument("--source", choices=("akshare", "tushare"), default="akshare",
+                        help="remote source for the missing span; akshare is the original default")
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--no-fetch", action="store_true",
                         help="merge local snapshots only; no network")
@@ -181,7 +243,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         # Local first, then the fetched span: merge_index_snapshots keeps the
         # last entry per date, so the freshly fetched rows win any overlap.
         remote_end = args.end or pd.Timestamp.today().strftime("%Y%m%d")
-        remote = normalize_index_frame(fetch_remote_range(code, args.start, remote_end), code, name)
+        fetch = fetch_remote_range if args.source == "akshare" else fetch_remote_range_tushare
+        remote = normalize_index_frame(fetch(code, args.start, remote_end), code, name)
         print("[fetch] {} rows [{}..{}]".format(len(remote), remote["date"].iloc[0], remote["date"].iloc[-1]),
               flush=True)
         merged = merge_index_snapshots(local + [remote])

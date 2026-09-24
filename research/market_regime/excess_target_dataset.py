@@ -34,7 +34,7 @@ import argparse
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Mapping, Optional, Sequence, Tuple
+from typing import Dict, Mapping, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -53,6 +53,22 @@ DEFAULT_HORIZONS = (5, 10, 20)
 DEFAULT_HORIZON = 10
 DEFAULT_WINDOW = 5
 BENCHMARK_NAME = "HS300"
+#: Display names for the benchmark files, keyed by file stem.  The excess label
+#: itself is always taken from ``--benchmark-file``; this only feeds the
+#: human-readable strings, which used to say "HS300" no matter which index was
+#: passed -- so every 中证1000 and 中证500 manifest described the wrong index.
+BENCHMARK_NAMES = {
+    "000300": "HS300",
+    "000852": "中证1000",
+    "000905": "中证500",
+}
+
+
+def benchmark_name(benchmark_file: Union[str, Path]) -> str:
+    """Display name for a benchmark file, falling back to its stem."""
+
+    stem = Path(str(benchmark_file)).stem
+    return BENCHMARK_NAMES.get(stem, stem)
 
 
 def window_columns(window: int, horizon: int) -> Tuple[str, str, str]:
@@ -375,7 +391,7 @@ def export_excess_targets(
         "label_semantics": {
             "event_centric": False,
             "benchmark": "{} index daily close; excess measured over the same two local sessions".format(
-                BENCHMARK_NAME
+                benchmark_name(benchmark_file)
             ),
             "benchmark_file": str(benchmark_file),
             "entry_rule": "T+1 fixed: next local trading session after EOD feature date",
@@ -467,8 +483,9 @@ def main(argv=None) -> int:
     )
     symbols = report["splits"]["train"]["symbol"].nunique()
     print(
-        "Built HS300-relative targets for {symbols} symbols; "
+        "Built {benchmark}-relative targets for {symbols} symbols; "
         "eligible rows={eligible}; grade scale m={m:.6g}; manifest={manifest}".format(
+            benchmark=benchmark_name(args.benchmark_file),
             symbols=symbols,
             eligible=eligible,
             m=scale,

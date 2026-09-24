@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from research.market_regime.probability_dataset import (
     _combine_compact_summaries,
@@ -143,3 +144,47 @@ def test_compact_batch_summaries_pool_counts_means_and_variance():
     assert combined.iloc[0]["count"] == 4
     assert combined.iloc[0]["mean"] == 4.0
     assert combined.iloc[0]["std"] > 2.0
+
+
+def _split_with_train_start(train_start):
+    panel = make_panel()
+    samples = build_future_trend_samples(panel, make_events(panel), horizon=3)
+    return split_time_series_samples(
+        samples,
+        train_end="2018-12-21",
+        validation_start="2018-12-24",
+        validation_end="2019-01-11",
+        test_start="2019-01-14",
+        embargo_days=2,
+        train_start=train_start,
+    )
+
+
+def test_train_start_defaults_to_an_unbounded_window():
+    """``None`` has to leave the older three-way split byte for byte identical."""
+
+    default = _split_with_train_start(None)
+    explicit = _split_with_train_start(pd.Timestamp("1900-01-01"))
+
+    assert default.equals(explicit)
+    assert default["split"].value_counts().to_dict() == explicit["split"].value_counts().to_dict()
+
+
+def test_train_start_truncates_only_the_front_of_train():
+    unbounded = _split_with_train_start(None)
+    truncated = _split_with_train_start("2018-12-10")
+
+    train = truncated[truncated["split"] == "train"]
+    assert len(train) < len(unbounded[unbounded["split"] == "train"])
+    assert train["date"].min() >= pd.Timestamp("2018-12-10")
+    # Validation and test are downstream of the training window, so narrowing
+    # train's *left* edge must not move a single one of their rows.
+    for split_name in ("validation", "test"):
+        left = unbounded[unbounded["split"] == split_name].reset_index(drop=True)
+        right = truncated[truncated["split"] == split_name].reset_index(drop=True)
+        assert left.equals(right)
+
+
+def test_train_start_after_train_end_is_rejected():
+    with pytest.raises(ValueError):
+        _split_with_train_start("2019-06-01")

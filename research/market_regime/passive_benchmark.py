@@ -51,7 +51,31 @@ from research.market_regime.output_paths import DATASET_DIR
 
 
 DEFAULT_BENCHMARK_FILE = "data/benchmarks/000300.csv"
+#: Row name of the index arm for the 000300 default.  Still a module constant so
+#: that callers keying off it (``forward_2026_backtest``) keep working.
 INDEX_ARM_NAME = "hs300_index_buy_hold"
+#: Row names by benchmark file stem.  The row used to carry the single constant
+#: above whichever index was loaded, so the 中证1000 and 中证500
+#: ``_backtest_metrics.csv`` files labelled their own index "hs300_index_buy_hold".
+#: The *numbers* were always the right index -- the levels come from
+#: ``benchmark_file`` -- but a reader comparing pools across those tables would
+#: conclude the excess was measured against HS300.
+INDEX_ARM_NAMES = {
+    "000300": INDEX_ARM_NAME,
+    "000852": "zz1000_index_buy_hold",
+    "000905": "zz500_index_buy_hold",
+}
+
+
+def index_arm_name(benchmark_file=DEFAULT_BENCHMARK_FILE) -> str:
+    """Row name for an index arm built from ``benchmark_file``.
+
+    An unrecognised file falls back to ``INDEX_ARM_NAME`` rather than inventing a
+    name: the callers that thread no file through are the 000300 ones, so the
+    fallback leaves their tables exactly as they were.
+    """
+
+    return INDEX_ARM_NAMES.get(Path(str(benchmark_file)).stem, INDEX_ARM_NAME)
 #: Sessions the index may be missing from the strategy's own session index before
 #: the window is rejected rather than silently compared over a different span.
 MAX_MISSING_SESSIONS = 5
@@ -137,12 +161,15 @@ def append_index_arm(
     left in place -- this adds a benchmark, it does not remove the diagnostic.
 
     ``levels`` overrides the file load; it exists so callers that already hold
-    the index series (and tests) can skip the disk read.
+    the index series (and tests) can skip the disk read.  The row is named after
+    ``benchmark_file``, so a caller passing levels for a non-000300 index should
+    pass the matching file too or the row will claim to be HS300.
     """
 
     if levels is None:
         levels = load_index_levels(benchmark_file)
-    row = index_arm_row(levels, results.index, float(initial_capital))
+    row = index_arm_row(levels, results.index, float(initial_capital),
+                        name=index_arm_name(benchmark_file))
     return pd.concat([metrics, pd.DataFrame([row])], ignore_index=True)
 
 
@@ -150,15 +177,22 @@ def benchmark_comparison(
     metrics: pd.DataFrame,
     strategy: str = None,
     sample_arm: str = "passive_equal_weight_sample_net",
-    index_arm: str = INDEX_ARM_NAME,
+    index_arm: Optional[str] = None,
+    benchmark_file=DEFAULT_BENCHMARK_FILE,
 ) -> Dict[str, float]:
     """Strategy excess over the index and over the equal-weight sample.
 
     The two are reported side by side so the size of the old
     convenience-baseline error stays visible instead of being quietly replaced.
     ``strategy`` defaults to the first row of ``metrics``.
+
+    ``index_arm`` defaults to the row name ``append_index_arm`` would have
+    written for ``benchmark_file``; pass one explicitly only to look up a table
+    built by something else.
     """
 
+    if index_arm is None:
+        index_arm = index_arm_name(benchmark_file)
     table = metrics.set_index("strategy")
     if strategy is None:
         strategy = str(metrics.iloc[0]["strategy"])

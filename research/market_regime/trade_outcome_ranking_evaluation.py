@@ -65,6 +65,13 @@ PUBLISHED_TOP_K = {
     "v1_robustness_walkforward": 0.05,
     "zz1000_excess_v1_outcome": 0.10,
     "zz1000_pit_outcome": 0.10,
+    # zz500 has no published width to inherit, so this entry is a
+    # pre-registered incumbent rather than an observed one: 0.10 is the house
+    # modal value (6 of the 8 above).  It is registered so that
+    # ``select_top_k_on_validation`` can decide -- the four gates may leave it
+    # alone, and "no candidate" means keep 0.10, never the validation-grid
+    # argmax.
+    "zz500_pit_outcome": 0.10,
 }
 
 
@@ -282,7 +289,7 @@ def run_outcome_ranking_evaluation(
         "baseline_top_k": incumbent_top_k,
         "selection_objective": "selection_rule.select_configuration vs top_k={}".format(incumbent_top_k),
         "test_forward_outcome_quality": outcome_quality(test, test_selected, horizon),
-        "test_return_vs_benchmarks": benchmark_comparison(metrics),
+        "test_return_vs_benchmarks": benchmark_comparison(metrics, benchmark_file=benchmark_file),
         "execution": {
             "signal_timing": "EOD score at t, order at next session t+1",
             "min_holding_days": int(horizon),

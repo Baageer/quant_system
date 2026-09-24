@@ -136,10 +136,19 @@ def test_an_explicit_override_wins_over_the_registry():
 
 
 def test_an_unknown_model_id_raises_instead_of_guessing():
-    with pytest.raises(ValueError) as excinfo:
-        resolve_baseline_top_k("zz500_pit_outcome")
+    """The example id must stay unregistered, or this stops testing anything.
 
-    assert "zz500_pit_outcome" in str(excinfo.value)
+    It was ``zz500_pit_outcome`` until that pool was built and registered; the
+    name is deliberately one no pool can plausibly take, so registering the
+    next pool cannot quietly turn this into an assertion about a real entry.
+    """
+
+    unregistered = "no_such_pool_pit_outcome"
+
+    with pytest.raises(ValueError) as excinfo:
+        resolve_baseline_top_k(unregistered)
+
+    assert unregistered in str(excinfo.value)
 
 
 def test_every_recorded_baseline_is_a_width_the_grid_can_offer():

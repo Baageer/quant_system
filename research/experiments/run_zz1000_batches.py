@@ -17,9 +17,14 @@ import time
 from pathlib import Path
 from typing import List, Optional, Sequence
 
+from research.market_regime.output_paths import DATASET_DIR
 
 DEFAULT_STOCK_FILE = "data/ZZ_1000.txt"
-DEFAULT_OUTPUT_DIR = "output/datasets"
+# The datasets live on D: (E: is FAT32 and cannot hold them); this default was
+# the one site still pointing at the retired relative ``output/datasets``, which
+# does not exist -- a batch run would have written its panels somewhere no
+# downstream step reads and then failed to find them.
+DEFAULT_OUTPUT_DIR = str(DATASET_DIR)
 DEFAULT_RUN_PREFIX = "zz1000_batch"
 
 
