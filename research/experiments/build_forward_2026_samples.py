@@ -17,7 +17,7 @@ therefore also starts from the static pool symbols and filters rows, so the two
 windows answer the same question on the same footing.  One consequence is
 recorded rather than papered over: a 2026 index member that is not in the static
 pool file cannot appear, which is a limitation the published runs share (see
-``docs/research/forward_paper_tracking_2026.md`` §3).
+``docs/research/04_validation_and_diagnostics/forward_paper_tracking_2026.md`` §3).
 
 Prices come from the two trees merged explicitly (``data_loader``'s
 ``load_local_price_history_multi``): the historical cache is read-only and the

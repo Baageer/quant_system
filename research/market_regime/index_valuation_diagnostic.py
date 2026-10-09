@@ -4,7 +4,7 @@ Answers "is the market expensive?" -- descriptively.  It reports where each
 valuation anchor sits in its own trailing history and labels the state, and it
 makes **no claim about future returns**.  That boundary is deliberate: the
 predictive use of valuation was closed by three independent studies (see
-``docs/research/value_factor_regime_study_summary.md``), the third of which
+``docs/research/03_factor_and_valuation/value_factor_regime_study_summary.md``), the third of which
 showed the value spread itself carries a full-period Sharpe of ~0.03, so even a
 perfect timer would earn ~nothing.  ``valuation_state_core`` enforces the
 boundary by refusing any forward-looking column.
@@ -342,7 +342,7 @@ def export(result: Mapping[str, object], output_dir: Path, run_id: str) -> Dict[
         "created_at": datetime.now().isoformat(),
         "question": "当前指数/全市场估值处于什么状态（描述型，非收益预测）",
         "descriptive_only": True,
-        "predictive_use_closed_by": "docs/research/value_factor_regime_study_summary.md",
+        "predictive_use_closed_by": "docs/research/03_factor_and_valuation/value_factor_regime_study_summary.md",
         "anchor_specs": {key: dict(value) for key, value in ANCHOR_SPECS.items()},
         "direction_convention": "price_multiple -> cheapness = 1 - percentile; yield -> cheapness = percentile",
         "paths": paths,

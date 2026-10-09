@@ -41,7 +41,7 @@ VALUATION_RUNS = {
     "stock": "stock_valuation",
 }
 # Descriptive-only banner, shown with every valuation figure.  The predictive use
-# of valuation is closed (see docs/research/value_factor_regime_study_summary.md)
+# of valuation is closed (see docs/research/03_factor_and_valuation/value_factor_regime_study_summary.md)
 # and this page must not imply otherwise.
 VALUATION_CAPTION = (
     "估值状态为离线**描述型**指标：它说明当前价格处在自身历史或池内的什么位置，"

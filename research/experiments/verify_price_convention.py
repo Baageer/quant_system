@@ -29,7 +29,7 @@ Four candidate conventions are tested against the cache's own returns:
 ``pre_close``    ``close / pre_close - 1``           -- tushare's adjusted prev
 ===============  =====================================================
 
-Judgement (pre-registered in ``docs/research/forward_paper_tracking_2026.md``
+Judgement (pre-registered in ``docs/research/04_validation_and_diagnostics/forward_paper_tracking_2026.md``
 §2): a convention is **confirmed** only if the maximum absolute return
 difference vs the cache stays below ``1e-4`` on every sampled symbol.  A
 near-miss that only differs on ex-dividend days is exactly the failure this is

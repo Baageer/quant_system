@@ -26,7 +26,7 @@ Cadence stays ISO-week.  That used to be described here as "no rebalance-phase
 freedom to average over" -- which was the bug, not a property.  The ISO-week
 dates are pinned to Monday, but *which day of the week the book is struck* is
 free, and v1 happens to sit on the luckiest one: the weekday family spans tens of
-pp on validation (``docs/research/weekday_phase_axis.md``).
+pp on validation (``docs/research/05_engine_and_methodology/weekday_phase_axis.md``).
 
 So the validation grid is now run once per weekday and phase-averaged, selection
 goes through ``selection_rule.select_configuration`` (phase average + phase floor

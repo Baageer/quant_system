@@ -1,6 +1,6 @@
 """How much of an arm's *absolute* return is its exposure path rather than its stock picking?
 
-``engine_churn_anomaly_resolved.md`` established that the production closure's
+``docs/research/05_engine_and_methodology/engine_churn_anomaly_resolved.md`` established that the production closure's
 exposure ``w = 持仓市值/(持仓市值+现金)`` is marked-to-market daily, so ``w`` rises
 after the market has risen and falls after it has fallen.  In a market whose
 daily returns are positively autocorrelated that makes ``cov(w_t, r_t) > 0``

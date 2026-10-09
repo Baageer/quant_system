@@ -3,7 +3,7 @@
 ``data/HS300.txt`` is *today's* 299 constituents applied to the whole history,
 which is exactly the survivorship/look-ahead the pipeline has always documented
 as an open limitation (``stock_valuation_diagnostic.py:96``,
-``zz1000_full_pipeline_summary.md:90``).  This script fetches the monthly
+``docs/research/02_model_and_target/zz1000_full_pipeline_summary.md:90``).  This script fetches the monthly
 constituent-weight snapshots that turn that static list into a real
 point-in-time universe.
 

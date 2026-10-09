@@ -438,7 +438,7 @@ def render_notes():
         "- **区间太短。** 32 个交易日、7 次调仓，单期结果无法与「一次好抽样」区分。"
         "这里只报告，不据此下结论。\n"
         "- **未做**：随机零假设、常仓位对照、前向窗口内的任何参数重选。前两项见 "
-        "`docs/research/forward_paper_tracking_2026.md`。")
+        "`docs/research/04_validation_and_diagnostics/forward_paper_tracking_2026.md`。")
     with st.expander("重新生成这些产物"):
         st.code("python -m research.experiments.fetch_tushare_stock_basic\n"
                 "python -m research.experiments.build_stock_selection_2026 --pools hs300,zz1000",

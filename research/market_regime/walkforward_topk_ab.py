@@ -1,6 +1,6 @@
 """Is the walk-forward arm actually better, or did it just use a narrower Top-K?
 
-``v1_robustness_validation_summary.md`` §5 recommends making annual walk-forward
+``docs/research/04_validation_and_diagnostics/v1_robustness_validation_summary.md`` §5 recommends making annual walk-forward
 retraining the production default, on the strength of +47.90% vs +45.98% and
 Sharpe 0.937 vs 0.898.  But §6 bullet 1 flags that this is **not a like-for-like
 comparison**: each arm's Top-K was chosen on its own (different) validation

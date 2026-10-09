@@ -1,6 +1,6 @@
 """Is v1's neutral-regime concentration a real structure, or a test-period accident?
 
-``v1_robustness_validation_summary.md`` §4 observed, on the **test** split only,
+``docs/research/04_validation_and_diagnostics/v1_robustness_validation_summary.md`` §4 observed, on the **test** split only,
 that v1's edge sits almost entirely in ``neutral`` market states (rolling arm:
 neutral Sharpe 2.22 vs risk_off -0.04, risk_on 0.30) -- and flagged it as a
 post-hoc pattern that had never been confirmed out of sample.

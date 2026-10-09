@@ -3,7 +3,7 @@
 ``random_portfolio_baseline`` draws uniform-random 20-name portfolios and runs
 them through the production execution chain.  On HS300 its 200-draw mean is
 **+15.9%**, while the pool equal-weight figure quoted in
-``zz1000_full_pipeline_summary.md`` (+1.47%) was derived from the excess labels
+``docs/research/02_model_and_target/zz1000_full_pipeline_summary.md`` (+1.47%) was derived from the excess labels
 by compounding the daily cross-sectional mean of ``future_excess_return_10d``
 over non-overlapping 10-day windows.  Both are supposed to describe "buy the
 pool and hold it".  A 14pp disagreement with a ~0.8pp standard error is

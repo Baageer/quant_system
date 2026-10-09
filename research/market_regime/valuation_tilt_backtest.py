@@ -28,7 +28,7 @@ have to be said before any number below is quoted:
 The prior on this is strongly negative and on the record: the value *factor*
 carries a real cross-sectional IC that flips sign on a 2-3 year style cycle,
 and the high-BP-minus-low-BP spread earned **+0.80%/yr at 24.52% vol over the
-full sample -- Sharpe 0.03** (``docs/research/value_factor_regime_study_summary.md``.
+full sample -- Sharpe 0.03** (``docs/research/03_factor_and_valuation/value_factor_regime_study_summary.md``.
 That study used daily ``bp`` on HS300 with no costs.  This one uses monthly
 multi-metric valuation state on 1295 symbols with costs, which is a different
 enough configuration to be worth measuring rather than assuming.
@@ -462,7 +462,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             "in-sample: no train/validation/test split was used, by design -- this measures the "
             "rule that was asked about, it does not select one",
         ],
-        "prior_evidence": "docs/research/value_factor_regime_study_summary.md (bp spread Sharpe 0.03)",
+        "prior_evidence": "docs/research/03_factor_and_valuation/value_factor_regime_study_summary.md (bp spread Sharpe 0.03)",
         "paths": written,
     }
     manifest_path = out_dir / "{}_manifest_{}.json".format(PREFIX, args.run_id)

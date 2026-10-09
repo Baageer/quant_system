@@ -4,7 +4,7 @@ This module answers "where does today's valuation sit in its own history / in
 its peer group", and **nothing else**.  It deliberately contains no forward
 return, no label, and no IC machinery: the predictive use of valuation was
 closed by three independent studies (see
-``docs/research/value_factor_regime_study_summary.md``), so a fourth attempt is
+``docs/research/03_factor_and_valuation/value_factor_regime_study_summary.md``), so a fourth attempt is
 out of scope by construction rather than by discipline.  :func:`assert_no_forward_columns`
 enforces that boundary on any frame leaving these diagnostics.
 

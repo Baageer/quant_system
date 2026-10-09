@@ -514,7 +514,7 @@ def export(result: Mapping[str, object], output_dir: Path, run_id: str) -> Dict[
         "created_at": datetime.now().isoformat(),
         "question": "个股当前估值处于自身历史与池内什么位置（描述型，非收益预测）",
         "descriptive_only": True,
-        "predictive_use_closed_by": "docs/research/value_factor_regime_study_summary.md",
+        "predictive_use_closed_by": "docs/research/03_factor_and_valuation/value_factor_regime_study_summary.md",
         "direction_convention": "price_multiple -> cheapness = 1 - percentile",
         "undefined_handling": "non-positive multiples are excluded from the rank and counted separately",
         "paths": paths,
